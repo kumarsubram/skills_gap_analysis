@@ -28,6 +28,7 @@ services:
       bash -c "
         airflow db migrate
       "
+    restart: "no"
 
   scheduler:
     build: .
