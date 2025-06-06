@@ -30,20 +30,20 @@ services:
       "
     restart: "no"
 
-    scheduler:
-      build: .
-      depends_on:
-        - db-migration
-      environment:
-        - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-        - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://postgres:postgres@postgres:5432/postgres
-        - AIRFLOW__CORE__FERNET_KEY=81HqDtbqAywKSOumSha3BhWNOdQ26slT6K0YaZeZyPs=
-        - AIRFLOW__CORE__LOAD_EXAMPLES=False
-        - AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL=10
-        - AIRFLOW__SCHEDULER__SCHEDULE_AFTER_TASK_EXECUTION=True
-        - AIRFLOW__SCHEDULER__SCHEDULER_HEARTBEAT_SEC=1
-      command: airflow scheduler
-      restart: unless-stopped
+  scheduler:
+    build: .
+    depends_on:
+      - db-migration
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://postgres:postgres@postgres:5432/postgres
+      - AIRFLOW__CORE__FERNET_KEY=81HqDtbqAywKSOumSha3BhWNOdQ26slT6K0YaZeZyPs=
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL=10
+      - AIRFLOW__SCHEDULER__SCHEDULE_AFTER_TASK_EXECUTION=True
+      - AIRFLOW__SCHEDULER__SCHEDULER_HEARTBEAT_SEC=1
+    command: airflow scheduler
+    restart: unless-stopped
 
   dag-processor:
     build: .
