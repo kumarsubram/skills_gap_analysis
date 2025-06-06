@@ -1,0 +1,8 @@
+project:
+  name: skills-gap-analysis
+  skip_parse: false
+  verbosity: debug
+webserver:
+  port: "8082"
+postgres:
+  port: "5433"

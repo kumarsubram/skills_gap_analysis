@@ -1,0 +1,23 @@
+# Astro Runtime includes the following pre-installed providers packages: https://www.astronomer.io/docs/astro/runtime-image-architecture#provider-packages
+
+# Kafka integration
+apache-airflow-providers-apache-kafka==1.8.1
+confluent-kafka==2.10.0
+
+# HTTP requests for APIs
+requests==2.32.3
+aiohttp==3.10.11
+
+# Data processing
+pandas==2.2.3
+python-dateutil==2.8.2
+
+# GitHub API
+PyGithub==2.6.1
+
+# Job posting APIs
+beautifulsoup4==4.12.2
+selenium==4.15.2
+
+# Monitoring and logging
+statsd==4.0.1
