@@ -8,51 +8,80 @@ services:
       POSTGRES_DB: postgres
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
-  airflow-init:
+  db-migration:
     build: .
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://postgres:postgres@postgres:5432/postgres
-      - AIRFLOW__CORE__FERNET_KEY=your-fernet-key-here
+      - AIRFLOW__CORE__FERNET_KEY=81HqDtbqAywKSOumSha3BhWNOdQ26slT6K0YaZeZyPs=
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
-      - _AIRFLOW_DB_UPGRADE=true
-      - _AIRFLOW_WWW_USER_CREATE=true
-      - _AIRFLOW_WWW_USER_USERNAME=admin
-      - _AIRFLOW_WWW_USER_PASSWORD=admin
     command: |
       bash -c "
         airflow db migrate &&
-        airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com
+        airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com || true &&
+        astro connections create --settings-file /usr/local/airflow/airflow_settings.yaml &&
+        astro variables create --settings-file /usr/local/airflow/airflow_settings.yaml &&
+        astro pools create --settings-file /usr/local/airflow/airflow_settings.yaml
       "
 
   scheduler:
     build: .
     depends_on:
-      - postgres
-      - airflow-init
+      - db-migration
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://postgres:postgres@postgres:5432/postgres
-      - AIRFLOW__CORE__FERNET_KEY=your-fernet-key-here
+      - AIRFLOW__CORE__FERNET_KEY=81HqDtbqAywKSOumSha3BhWNOdQ26slT6K0YaZeZyPs=
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
     command: airflow scheduler
+    restart: unless-stopped
+
+  dag-processor:
+    build: .
+    depends_on:
+      - db-migration
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://postgres:postgres@postgres:5432/postgres
+      - AIRFLOW__CORE__FERNET_KEY=81HqDtbqAywKSOumSha3BhWNOdQ26slT6K0YaZeZyPs=
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+    command: airflow dag-processor
+    restart: unless-stopped
+
+  triggerer:
+    build: .
+    depends_on:
+      - db-migration
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://postgres:postgres@postgres:5432/postgres
+      - AIRFLOW__CORE__FERNET_KEY=81HqDtbqAywKSOumSha3BhWNOdQ26slT6K0YaZeZyPs=
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+    command: airflow triggerer
+    restart: unless-stopped
 
   webserver:
     build: .
     depends_on:
-      - postgres
-      - airflow-init
+      - db-migration
     environment:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://postgres:postgres@postgres:5432/postgres
-      - AIRFLOW__CORE__FERNET_KEY=your-fernet-key-here
+      - AIRFLOW__CORE__FERNET_KEY=81HqDtbqAywKSOumSha3BhWNOdQ26slT6K0YaZeZyPs=
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
     ports:
       - "8087:8080"
     command: airflow api-server
+    restart: unless-stopped
 
 volumes:
   postgres_data:
