@@ -27,7 +27,7 @@ dag = DAG(
 )
 
 def print_environment_info(**context):
-    """Print basic environment info and execution info"""
+    """Print basic environment and execution info"""
     import os
     import platform
     import sys
