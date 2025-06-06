@@ -26,11 +26,7 @@ services:
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
     command: |
       bash -c "
-        airflow db migrate &&
-        airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com || true &&
-        astro connections create --settings-file /usr/local/airflow/airflow_settings.yaml &&
-        astro variables create --settings-file /usr/local/airflow/airflow_settings.yaml &&
-        astro pools create --settings-file /usr/local/airflow/airflow_settings.yaml
+        airflow db migrate
       "
 
   scheduler:
@@ -69,7 +65,7 @@ services:
     command: airflow triggerer
     restart: unless-stopped
 
-  webserver:
+  api-server:
     build: .
     depends_on:
       - db-migration
@@ -80,7 +76,7 @@ services:
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
     ports:
       - "8087:8080"
-    command: airflow api-server
+    command: airflow standalone
     restart: unless-stopped
 
 volumes:
