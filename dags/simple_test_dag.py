@@ -19,7 +19,7 @@ default_args = {
 dag = DAG(
     'simple_test_dag',
     default_args=default_args,
-    description='DAG to verify local and remote deployment',
+    description='DAG local and remote deployment',
     schedule=timedelta(hours=6),  # Run every 6 hours
     catchup=False,
     max_active_runs=1,
