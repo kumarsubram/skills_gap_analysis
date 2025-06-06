@@ -24,9 +24,6 @@ services:
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://postgres:postgres@postgres:5432/postgres
       - AIRFLOW__CORE__FERNET_KEY=81HqDtbqAywKSOumSha3BhWNOdQ26slT6K0YaZeZyPs=
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
-      - AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL=10
-      - AIRFLOW__CORE__PARALLELISM=16
-      - AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG=8
     command: |
       bash -c "
         airflow db migrate
