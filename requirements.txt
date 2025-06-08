@@ -21,3 +21,6 @@ selenium==4.15.2
 
 # Monitoring and logging
 statsd==4.0.1
+
+# Parquet 
+pyarrow==20.0.0

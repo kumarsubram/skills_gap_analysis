@@ -12,7 +12,7 @@ import time
 from typing import Dict
 
 # Configuration (single source of truth)
-DEFAULT_START_DATE = "2025-02-24"
+DEFAULT_START_DATE = "2025-05-09"
 
 # Import functions directly to avoid circular imports
 from include.github_processing.keyword_processor import load_keywords
@@ -78,7 +78,7 @@ def setup_and_validate(default_start_date=None, **context) -> Dict:
         print(f"   📅 Total dates: {len(dates_to_process)}")
         print(f"   ✅ Already processed: {already_processed}")
         print(f"   🔄 Needs processing: {needs_processing}")
-        print(f"   ⚡ Processing mode: One date at a time")
+        print("   ⚡ Processing mode: One date at a time")
         print(f"   ⏱️  Setup time: {setup_time:.1f} seconds")
         
         return config
@@ -114,7 +114,7 @@ def process_dates_one_by_one(**context) -> Dict:
     
     print(f"🔄 Processing {len(dates_to_process)} dates ONE BY ONE...")
     print(f"🔑 Using {len(keywords)} keywords")
-    print(f"📋 Pipeline per date: download → process → upload")
+    print("📋 Pipeline per date: download → process → upload")
     
     for date_idx, date_str in enumerate(dates_to_process):
         print(f"\n{'='*80}")
