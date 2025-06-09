@@ -42,8 +42,13 @@ def file_exists(filename: str, data_source: str, layer: str) -> bool:
                 client.head_object(Bucket=bucket, Key=s3_key)
                 print(f"✅ File exists in MinIO {layer}: {filename}")
                 return True
+            except client.exceptions.NoSuchKey:
+                # File doesn't exist - this is normal, not an error
+                return False
             except Exception as e:
-                print(f"❌ Exception: {e}")
+                # Only print actual errors, not "file not found"
+                if "404" not in str(e) and "Not Found" not in str(e):
+                    print(f"⚠️  MinIO check failed for {filename}: {e}")
                 return False
     
     return False
