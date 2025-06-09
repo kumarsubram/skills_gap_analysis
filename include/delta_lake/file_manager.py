@@ -20,27 +20,53 @@ else:
     def get_bucket_name(): return None
 
 
-def file_exists(filename: str, data_source: str, layer: str) -> bool:
-    """Check if a specific file exists in any layer"""
+def file_exists(filename: str, data_source: str, layer_path: str) -> bool:
+    """
+    Check if a specific file exists in any layer (with optional subfolder support)
+    
+    Args:
+        filename: File to check (e.g., "tech_trends_summary_2024-12-31.parquet")
+        data_source: Data source (e.g., "github") 
+        layer_path: Layer with optional subfolder (e.g., "silver" or "silver/tech_trends_summary")
+    """
     paths = get_storage_paths(data_source)  # date not needed for paths
     
-    if ENV.environment == 'mac':
-        # Check local layer
-        layer_path = paths[f'{layer}_path']
-        file_path = os.path.join(layer_path, filename)
-        exists = os.path.exists(file_path) and os.path.getsize(file_path) > 0
-        if exists:
-            print(f"✅ File exists locally in {layer}: {filename}")
-        return exists
+    # Parse layer and subfolder
+    if '/' in layer_path:
+        layer, subfolder = layer_path.split('/', 1)
     else:
-        # Check MinIO layer
+        layer, subfolder = layer_path, None
+    
+    if ENV.environment == 'mac':
+        # Check local layer (with optional subfolder)
+        base_layer_path = paths[f'{layer}_path']
+        
+        if subfolder:
+            full_path = os.path.join(base_layer_path, subfolder)
+        else:
+            full_path = base_layer_path
+            
+        file_path = os.path.join(full_path, filename)
+        exists = os.path.exists(file_path) and os.path.getsize(file_path) > 0
+        
+        if exists:
+            print(f"✅ File exists locally in {layer_path}: {filename}")
+        return exists
+        
+    else:
+        # Check MinIO layer (with optional subfolder)
         client = get_minio_client()
         if client:
             bucket = get_bucket_name()
-            s3_key = f"{layer}/{data_source}/{filename}"
+            
+            if subfolder:
+                s3_key = f"{layer}/{data_source}/{subfolder}/{filename}"
+            else:
+                s3_key = f"{layer}/{data_source}/{filename}"
+                
             try:
                 client.head_object(Bucket=bucket, Key=s3_key)
-                print(f"✅ File exists in MinIO {layer}: {filename}")
+                print(f"✅ File exists in MinIO {layer_path}: {filename}")
                 return True
             except client.exceptions.NoSuchKey:
                 # File doesn't exist - this is normal, not an error

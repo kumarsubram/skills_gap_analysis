@@ -74,7 +74,7 @@ def load_processed_output_ids(date_str):
         except Exception as e:
             logging.warning(f"⚠️ Error loading processed output: {e}")
     
-    logging.info(f"📋 Starting fresh - no previous processed output found")
+    logging.info("📋 Starting fresh - no previous processed output found")
     return set()
 
 def save_processed_output_ids(date_str, processed_ids, metrics):

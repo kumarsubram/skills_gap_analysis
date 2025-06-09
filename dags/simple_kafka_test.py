@@ -2,7 +2,7 @@
 Most basic Kafka test - just try to create a producer and send one message
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 

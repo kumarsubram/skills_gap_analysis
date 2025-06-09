@@ -1,9 +1,8 @@
 """
 GitHub Batch Events Daily DAG
 
-Clean Parquet-first pipeline: Bronze → Silver → Gold
-Flow: Download GZ → Extract to Parquet → Aggregate to Parquet → Cleanup → Validate
-No CSV files anywhere - pure Parquet efficiency.
+One task processes one date: Download → Extract → Aggregate → Cleanup
+Simple, idempotent, with detailed logging.
 """
 
 from airflow import DAG
@@ -17,201 +16,233 @@ from include.github.github_aggregator import aggregate_and_save_to_silver
 from include.config.env_detection import ENV
 from include.delta_lake.file_manager import delete_files_from_layer, file_exists
 
-# START DATE - Starting date for range processing
-START_DATE = "2024-12-29"
+# CONFIGURATION
+START_DATE = "2024-12-28"
+SKIP_START = "2024-12-31"  # Optional: "2024-12-31" or None
+SKIP_END = "2025-06-06"    # Optional: "2025-06-06" or None
 
 
-def get_date_range():
-    """Get list of dates from START_DATE to yesterday, excluding specific range"""
-    from datetime import datetime, timedelta
-    
+def get_next_unprocessed_date():
+    """Find the next date that needs processing"""
     start_date = datetime.strptime(START_DATE, "%Y-%m-%d")
     yesterday = datetime.now() - timedelta(days=1)
     
-    # Define skip range
-    skip_start = datetime.strptime("2024-12-31", "%Y-%m-%d")
-    skip_end = datetime.strptime("2025-06-06", "%Y-%m-%d")
+    # Parse skip dates if provided
+    skip_start = datetime.strptime(SKIP_START, "%Y-%m-%d") if SKIP_START else None
+    skip_end = datetime.strptime(SKIP_END, "%Y-%m-%d") if SKIP_END else None
     
-    dates = []
     current_date = start_date
     while current_date <= yesterday:
-        # Skip dates in the specified range
-        if skip_start <= current_date <= skip_end:
+        # Skip dates in range if specified
+        if skip_start and skip_end and skip_start <= current_date <= skip_end:
             current_date += timedelta(days=1)
             continue
+        
+        date_str = current_date.strftime("%Y-%m-%d")
+        
+        # Check if all Silver files exist (with folder structure)
+        silver_checks = [
+            file_exists(f"tech_trends_summary_{date_str}.parquet", 'github', 'silver/tech_trends_summary'),
+            file_exists(f"top_repos_{date_str}.parquet", 'github', 'silver/top_repos'),
+            file_exists(f"event_summary_{date_str}.parquet", 'github', 'silver/event_summary'),
+            file_exists(f"hourly_trends_{date_str}.parquet", 'github', 'silver/hourly_trends')
+        ]
+        
+        existing_count = sum(1 for exists in silver_checks if exists)
+        
+        if existing_count < 4:  # Not complete
+            return date_str
             
-        dates.append(current_date.strftime("%Y-%m-%d"))
         current_date += timedelta(days=1)
     
-    return dates
+    return None  # All dates complete
 
 
-def download_task(**context):
-    """Download GitHub Archive GZ files to Bronze"""
-    dates_to_process = get_date_range()
+def cleanup_bronze_files(date_str):
+    """Clean up Bronze files for a specific date"""
+    # Delete GZ files (24 files)
+    gz_files = [f"{date_str}-{hour:02d}.json.gz" for hour in range(24)]
+    delete_files_from_layer(gz_files, 'github', 'bronze', force_cleanup=True)
     
-    print("DOWNLOAD TASK - GitHub Archive to Bronze")
+    # Delete hourly Parquet files (24 files)
+    parquet_files = [f"keywords-{date_str}-hour-{hour:02d}.parquet" for hour in range(24)]
+    delete_files_from_layer(parquet_files, 'github', 'bronze', force_cleanup=True)
+    
+    print(f"🗑️  Cleaned 48 Bronze files for {date_str}")
+
+
+def process_next_date(**context):
+    """Process the next unprocessed date completely - FIXED LOGIC"""
+    
+    print("🚀 GITHUB BATCH PROCESSING")
+    print("=" * 60)
     print(f"Environment: {ENV.environment.upper()}")
-    print(f"Dates to process: {len(dates_to_process)}")
+    print(f"Start Date: {START_DATE}")
     
-    download_results = {}
+    if SKIP_START and SKIP_END:
+        print(f"Skip Range: {SKIP_START} to {SKIP_END}")
+    else:
+        print("Skip Range: None")
     
-    for date_str in dates_to_process:
-        print(f"\nProcessing {date_str}...")
+    # Find next date to process
+    next_date = get_next_unprocessed_date()
+    
+    if not next_date:
+        print("\n✅ ALL DATES COMPLETE!")
+        print("🏁 No more dates to process.")
+        return {'status': 'all_complete'}
+    
+    print(f"\n🎯 Target Date: {next_date}")
+    
+    # ❌ REMOVED: The early exit check that was causing the bug
+    # The get_next_unprocessed_date() function already ensures this date needs processing
+    # No need to double-check here!
+    
+    # Check current status for logging purposes only
+    silver_checks = [
+        file_exists(f"tech_trends_summary_{next_date}.parquet", 'github', 'silver/tech_trends_summary'),
+        file_exists(f"top_repos_{next_date}.parquet", 'github', 'silver/top_repos'),
+        file_exists(f"event_summary_{next_date}.parquet", 'github', 'silver/event_summary'),
+        file_exists(f"hourly_trends_{next_date}.parquet", 'github', 'silver/hourly_trends')
+    ]
+    existing_count = sum(1 for exists in silver_checks if exists)
+    
+    if existing_count > 0:
+        print(f"⚠️  {next_date} PARTIALLY COMPLETE: {existing_count}/4 Silver files")
+        print("🔄 Will complete processing")
+    else:
+        print(f"📝 {next_date} READY FOR PROCESSING: {existing_count}/4 Silver files")
+    
+    try:
+        # STEP 1: Download
+        print("\n" + "=" * 60)
+        print(f"📥 STEP 1: DOWNLOADING {next_date}")
+        print("=" * 60)
         
-        # Check if Silver Parquet files exist - skip if complete
-        silver_files = [
-            f"tech_trends_summary_{date_str}.parquet",
-            f"top_repos_{date_str}.parquet", 
-            f"event_summary_{date_str}.parquet",
-            f"hourly_trends_{date_str}.parquet"
+        download_result = download_github_date(next_date)
+        
+        print("📊 Download Results:")
+        print(f"   ✅ Successful: {download_result['successful_downloads']}")
+        print(f"   ♻️  Cached: {download_result['cached_files']}")
+        print(f"   ❌ Failed: {download_result['failed_downloads']}")
+        
+        if download_result['failed_downloads'] > 0:
+            failed_hours = download_result.get('failed_hours', [])
+            print(f"   🔴 Failed hours: {failed_hours}")
+        
+        # STEP 2: Extract
+        print("\n" + "=" * 60)
+        print(f"🔍 STEP 2: EXTRACTING KEYWORDS FOR {next_date}")
+        print("=" * 60)
+        
+        extract_result = extract_keywords_for_date(next_date)
+        
+        print("📊 Extract Results:")
+        print(f"   ✅ Successful: {extract_result['successful_extractions']}")
+        print(f"   ❌ Failed: {extract_result['failed_extractions']}")
+        
+        if extract_result['failed_extractions'] > 0:
+            failed_hours = extract_result.get('failed_hours', [])
+            print(f"   🔴 Failed hours: {failed_hours}")
+        
+        # STEP 3: Aggregate
+        print("\n" + "=" * 60)
+        print(f"📊 STEP 3: AGGREGATING TO SILVER FOR {next_date}")
+        print("=" * 60)
+        
+        aggregate_result = aggregate_and_save_to_silver(next_date)
+        
+        if not aggregate_result['success']:
+            reason = aggregate_result.get('reason', 'unknown')
+            print(f"❌ AGGREGATION FAILED: {reason}")
+            print("🔒 Bronze files preserved for retry")
+            return {
+                'status': 'failed', 
+                'date': next_date,
+                'stage': 'aggregate',
+                'reason': reason
+            }
+        
+        print("📊 Aggregate Results:")
+        print(f"   ✅ Files saved: {aggregate_result['files_saved']}/4")
+        print(f"   📈 Keywords: {aggregate_result['total_keywords']}")
+        print(f"   💬 Mentions: {aggregate_result['total_mentions']:,}")
+        
+        # STEP 4: Cleanup
+        print("\n" + "=" * 60)
+        print(f"🗑️  STEP 4: CLEANING BRONZE FOR {next_date}")
+        print("=" * 60)
+        
+        cleanup_bronze_files(next_date)
+        
+        # FINAL VALIDATION
+        print("\n" + "=" * 60)
+        print(f"✅ FINAL VALIDATION FOR {next_date}")
+        print("=" * 60)
+        
+        # FINAL VALIDATION with folder structure
+        final_silver_checks = [
+            file_exists(f"tech_trends_summary_{next_date}.parquet", 'github', 'silver/tech_trends_summary'),
+            file_exists(f"top_repos_{next_date}.parquet", 'github', 'silver/top_repos'),
+            file_exists(f"event_summary_{next_date}.parquet", 'github', 'silver/event_summary'),
+            file_exists(f"hourly_trends_{next_date}.parquet", 'github', 'silver/hourly_trends')
         ]
-        existing_count = sum(1 for f in silver_files if file_exists(f, 'github', 'silver'))
+        final_silver_count = sum(1 for exists in final_silver_checks if exists)
         
-        if existing_count == 4:
-            print(f"{date_str}: Silver Parquet complete - SKIPPING")
-            download_results[date_str] = {'status': 'skipped', 'reason': 'silver_exists'}
-            continue
+        # Check Bronze files are gone
+        gz_files = [f"{next_date}-{hour:02d}.json.gz" for hour in range(24)]
+        parquet_files = [f"keywords-{next_date}-hour-{hour:02d}.parquet" for hour in range(24)]
         
-        print(f"{date_str}: Downloading GZ files...")
-        result = download_github_date(date_str)
-        download_results[date_str] = result
+        remaining_gz = sum(1 for f in gz_files if file_exists(f, 'github', 'bronze'))
+        remaining_parquet = sum(1 for f in parquet_files if file_exists(f, 'github', 'bronze'))
         
-        if result['failed_downloads'] > 0:
-            print(f"{date_str}: Failed hours: {result['failed_hours']}")
+        print("📊 Validation Results:")
+        print(f"   📁 Silver files: {final_silver_count}/4")
+        print(f"   🗑️  Remaining GZ: {remaining_gz}/24")
+        print(f"   🗑️  Remaining Parquet: {remaining_parquet}/24")
+        
+        success = (final_silver_count == 4) and (remaining_gz == 0) and (remaining_parquet == 0)
+        
+        if success:
+            print(f"\n🎉 SUCCESS: {next_date} PROCESSED COMPLETELY!")
+            print("💾 Freed ~1-2GB disk space")
+            
+            # Show what's next (for logging only - don't exit early)
+            next_next_date = get_next_unprocessed_date()
+            if next_next_date:
+                print(f"🎯 Next run will process: {next_next_date}")
+            else:
+                print("🏁 ALL DATES WILL BE COMPLETE!")
+            
+            print("=" * 60)
+            
+            return {
+                'status': 'success',
+                'date': next_date,
+                'silver_files': final_silver_count,
+                'next_date': next_next_date
+            }
         else:
-            print(f"{date_str}: Download complete")
-    
-    return download_results
-
-
-def extract_task(**context):
-    """Extract GZ → Parquet in Bronze layer"""
-    download_results = context['task_instance'].xcom_pull(task_ids='download_github_data')
-    
-    print("EXTRACT TASK - GZ → Parquet (Bronze)")
-    extract_results = {}
-    
-    for date_str, download_result in download_results.items():
-        print(f"\nProcessing {date_str}...")
-        
-        if download_result.get('status') == 'skipped':
-            print(f"{date_str}: Skipping extract (Silver exists)")
-            extract_results[date_str] = {'status': 'skipped'}
-            continue
-        
-        print(f"{date_str}: Extracting GZ → Parquet...")
-        result = extract_keywords_for_date(date_str)
-        extract_results[date_str] = result
-        
-        if result['failed_extractions'] > 0:
-            print(f"{date_str}: Failed hours: {result['failed_hours']}")
-        else:
-            print(f"{date_str}: Extract complete")
-    
-    return extract_results
-
-
-def aggregate_task(**context):
-    """Aggregate Bronze Parquet → Silver Parquet"""
-    extract_results = context['task_instance'].xcom_pull(task_ids='extract_keywords')
-    
-    print("AGGREGATE TASK - Bronze Parquet → Silver Parquet")
-    aggregate_results = {}
-    
-    for date_str, extract_result in extract_results.items():
-        print(f"\nProcessing {date_str}...")
-        
-        if extract_result.get('status') == 'skipped':
-            print(f"{date_str}: Skipping aggregate (Silver exists)")
-            aggregate_results[date_str] = {'status': 'skipped'}
-            continue
-        
-        print(f"{date_str}: Aggregating to Silver Parquet...")
-        result = aggregate_and_save_to_silver(date_str)
-        aggregate_results[date_str] = result
-        
-        if not result['success']:
-            reason = result.get('reason', 'unknown')
-            print(f"{date_str}: Aggregation failed - {reason}")
-        else:
-            print(f"{date_str}: Aggregate complete")
-    
-    return aggregate_results
-
-
-def cleanup_task(**context):
-    """Clean up Bronze layer (GZ + intermediate Parquet)"""
-    aggregate_results = context['task_instance'].xcom_pull(task_ids='aggregate_to_silver')
-    
-    print("CLEANUP TASK - Bronze GZ + Parquet removal")
-    cleanup_results = {}
-    
-    for date_str, aggregate_result in aggregate_results.items():
-        print(f"\nProcessing {date_str}...")
-        
-        if aggregate_result.get('status') == 'skipped' or not aggregate_result.get('success'):
-            print(f"{date_str}: Skipping cleanup (not processed)")
-            cleanup_results[date_str] = {'status': 'skipped'}
-            continue
-        
-        print(f"{date_str}: Cleaning Bronze layer...")
-        
-        # Delete raw GZ files (GitHub Archive data)
-        gz_files = [f"{date_str}-{hour:02d}.json.gz" for hour in range(24)]
-        delete_files_from_layer(gz_files, 'github', 'bronze', force_cleanup=True)
-        
-        # Delete intermediate hourly Parquet files
-        parquet_files = [f"keywords-{date_str}-hour-{hour:02d}.parquet" for hour in range(24)]
-        delete_files_from_layer(parquet_files, 'github', 'bronze', force_cleanup=True)
-        
-        total_cleaned = len(gz_files) + len(parquet_files)
-        cleanup_results[date_str] = {'total_cleaned': total_cleaned}
-        print(f"{date_str}: Cleaned {total_cleaned} Bronze files")
-    
-    return cleanup_results
-
-
-def validate_task(**context):
-    """Validate all dates have Silver Parquet files"""
-    dates_to_check = get_date_range()
-    
-    print("VALIDATE TASK - Silver Parquet completeness")
-    print(f"Checking {len(dates_to_check)} dates")
-    
-    valid_dates = 0
-    invalid_dates = []
-    
-    for date_str in dates_to_check:
-        silver_files = [
-            f"tech_trends_summary_{date_str}.parquet",
-            f"top_repos_{date_str}.parquet",
-            f"event_summary_{date_str}.parquet", 
-            f"hourly_trends_{date_str}.parquet"
-        ]
-        
-        silver_count = sum(1 for f in silver_files if file_exists(f, 'github', 'silver'))
-        
-        if silver_count == 4:
-            valid_dates += 1
-        else:
-            invalid_dates.append(f"{date_str} ({silver_count}/4)")
-    
-    print("\nVALIDATION SUMMARY:")
-    print(f"Valid: {valid_dates}/{len(dates_to_check)}")
-    
-    if invalid_dates:
-        print(f"Invalid: {', '.join(invalid_dates)}")
-        raise Exception(f"Validation failed for {len(invalid_dates)} dates")
-    
-    print("ALL DATES VALIDATED - Silver Parquet complete")
-    return {'valid_dates': valid_dates, 'total_dates': len(dates_to_check)}
+            print(f"❌ VALIDATION FAILED for {next_date}")
+            validation_error = f"Validation failed for {next_date}"
+            raise Exception(validation_error)
+            
+    except Exception as e:
+        error_msg = str(e)
+        print(f"\n❌ ERROR PROCESSING {next_date}: {error_msg}")
+        print("🔒 Bronze files preserved for retry")
+        print("=" * 60)
+        return {
+            'status': 'error',
+            'date': next_date, 
+            'error': error_msg
+        }
 
 
 # DAG Definition
 default_args = {
     "owner": "data-engineering",
-    "start_date": datetime(2024, 12, 1, tzinfo=timezone.utc),
+    "start_date": datetime(2024, 10, 1, tzinfo=timezone.utc),
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
 }
@@ -219,42 +250,15 @@ default_args = {
 with DAG(
     dag_id="github_batch_events_daily",
     default_args=default_args,
-    description=f"GitHub Batch pipeline from {START_DATE} to yesterday",
-    schedule=None,
+    description=f"Simple GitHub processing from {START_DATE}",
+    schedule=None, #"0 9 * * *",  # Daily at 9 AM
     catchup=False,
     max_active_runs=1,
-    tags=["github", "batch", "efficient"],
+    tags=["github", "batch", "simple"],
 ) as dag:
 
-    download = PythonOperator(
-        task_id="download_github_data",
-        python_callable=download_task,
-        execution_timeout=timedelta(hours=2),
+    process_date = PythonOperator(
+        task_id="process_date",
+        python_callable=process_next_date,
+        execution_timeout=timedelta(hours=6),
     )
-
-    extract = PythonOperator(
-        task_id="extract_keywords",
-        python_callable=extract_task,
-        execution_timeout=timedelta(hours=3),
-    )
-
-    aggregate = PythonOperator(
-        task_id="aggregate_to_silver",
-        python_callable=aggregate_task,
-        execution_timeout=timedelta(hours=1),
-    )
-
-    cleanup = PythonOperator(
-        task_id="cleanup_bronze",
-        python_callable=cleanup_task,
-        execution_timeout=timedelta(minutes=30),
-    )
-
-    validate = PythonOperator(
-        task_id="validate_success",
-        python_callable=validate_task,
-        execution_timeout=timedelta(minutes=15),
-    )
-
-    # Clean linear flow
-    download >> extract >> aggregate >> cleanup >> validate
