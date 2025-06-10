@@ -17,7 +17,7 @@ from include.config.env_detection import ENV
 from include.delta_lake.file_manager import delete_files_from_layer, file_exists
 
 # CONFIGURATION
-START_DATE = "2024-09-25"
+START_DATE = "2024-09-01"
 SKIP_START = "2024-12-28"  # Optional: "2024-12-31" or None
 SKIP_END = "2025-06-07"    # Optional: "2025-06-06" or None
 
@@ -208,17 +208,19 @@ default_args = {
 }
 
 with DAG(
-    dag_id="github_batch_events_daily",
+    dag_id="daily_github_batch_events",
     default_args=default_args,
-    description=f"Simple GitHub processing from {START_DATE}",
-    schedule=None,  # Manual or sensor-triggered
+    description=f"Heavy GitHub processing from {START_DATE}",
+    schedule=None,
     catchup=False,
     max_active_runs=1,
-    tags=["github", "batch", "simple"],
+    tags=["github", "batch", "heavy"],
 ) as dag:
 
     process_all = PythonOperator(
         task_id="process_all_pending_dates",
         python_callable=process_all_pending_dates,
+        pool='batch_heavy',        # 🎯 Gets 64 dedicated slots
+        priority_weight=1,         # LOW priority (runs when resources available)
         execution_timeout=timedelta(hours=6),
     )
