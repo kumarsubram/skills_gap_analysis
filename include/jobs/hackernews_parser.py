@@ -48,50 +48,63 @@ def parse_hn_structured_line(first_line: str) -> Dict[str, str]:
     # Analyze remaining parts
     remaining_parts = parts[1:]
     
+    # First pass: find the best location (prioritize parts with strong location indicators)
+    best_location = ""
+    best_location_score = 0
+    
+    # Second pass: find the best title
+    best_title = ""
+    best_title_score = 0
+    
     for part in remaining_parts:
         part_lower = part.lower()
         
         # Skip URLs
         if part_lower.startswith(('http', 'www')):
             continue
+        
+        # Calculate location score
+        location_score = 0
+        strong_location_words = ['remote', 'hybrid', 'onsite', 'sf', 'nyc', 'seattle', 'austin', 'boston', 'usa', 'us', 'canada', 'uk', 'europe']
+        city_state_pattern = re.search(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*,\s*[A-Z]{2,3}\b', part)
+        
+        for word in strong_location_words:
+            if word in part_lower:
+                location_score += 2
+        
+        if city_state_pattern:
+            location_score += 3
             
-        # Skip common non-content parts
-        if part_lower in ['full-time', 'part-time', 'contract', 'remote', 'onsite', 'hybrid']:
-            continue
+        if any(word in part_lower for word in ['california', 'texas', 'new york', 'florida']):
+            location_score += 2
             
-        # Check if this looks like a job title
-        title_indicators = [
-            'engineer', 'developer', 'manager', 'analyst', 'director', 'designer',
-            'architect', 'scientist', 'specialist', 'coordinator', 'lead', 'senior',
-            'junior', 'principal', 'staff', 'devrel', 'platform', 'frontend', 'backend',
-            'fullstack', 'full stack', 'software', 'data', 'product', 'marketing',
-            'sales', 'operations', 'intern', 'associate'
-        ]
+        # Reduce score for employment types in location context
+        if any(word in part_lower for word in ['full-time', 'part-time', 'contract']):
+            location_score -= 1
+            
+        # Calculate title score
+        title_score = 0
+        title_words = ['engineer', 'developer', 'manager', 'analyst', 'director', 'designer', 'architect', 'scientist', 'specialist', 'devrel', 'platform']
         
-        # Check if this looks like a location
-        location_indicators = [
-            'sf', 'nyc', 'la', 'seattle', 'austin', 'boston', 'chicago', 'denver',
-            'portland', 'atlanta', 'miami', 'dallas', 'houston', 'philadelphia',
-            'remote', 'onsite', 'hybrid', 'california', 'texas', 'new york',
-            'canada', 'uk', 'europe', 'worldwide', 'usa', 'us'
-        ]
-        
-        # Check for city,state pattern
-        is_city_state = bool(re.search(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*,\s*[A-Z]{2,3}\b', part))
-        
-        # Classify this part
-        has_title_words = any(indicator in part_lower for indicator in title_indicators)
-        has_location_words = any(indicator in part_lower for indicator in location_indicators)
-        
-        # Priority: title first, then location
-        if has_title_words and not result['title']:
-            result['title'] = part
-        elif (has_location_words or is_city_state) and not result['location']:
-            result['location'] = part
-        elif not result['title'] and len(part) > 5:  # Fallback for title
-            result['title'] = part
-        elif not result['location'] and len(part) > 2:  # Fallback for location
-            result['location'] = part
+        for word in title_words:
+            if word in part_lower:
+                title_score += 1
+                
+        # Reduce score for parts that are clearly employment types
+        if part_lower.strip() in ['full-time', 'part-time', 'contract', 'remote', 'onsite', 'hybrid']:
+            title_score = 0
+            
+        # Update best candidates
+        if location_score > best_location_score:
+            best_location = part
+            best_location_score = location_score
+            
+        if title_score > best_title_score and location_score < 2:  # Don't use high-scoring locations as titles
+            best_title = part
+            best_title_score = title_score
+    
+    result['location'] = best_location
+    result['title'] = best_title
     
     return result
 
@@ -160,7 +173,20 @@ def extract_location(text: str, structured_location: str) -> str:
     if structured_location:
         return structured_location
     
-    # Look for location patterns
+    # Special case: look for location in the first line parts
+    lines = text.split('\n')
+    first_line = lines[0] if lines else ""
+    
+    if '|' in first_line:
+        parts = [part.strip() for part in first_line.split('|')]
+        # Look for parts with strong location indicators
+        for part in parts:
+            part_lower = part.lower()
+            strong_location_words = ['remote', 'hybrid', 'onsite', 'sf', 'nyc', 'usa', 'us', 'canada', 'uk', 'europe']
+            if any(word in part_lower for word in strong_location_words):
+                return part
+    
+    # Look for location patterns in full text
     patterns = [
         r'(?:Location|Based|Office):\s*([^.\n|]+)',
         r'(?:Remote|Onsite|Hybrid)(?:\s*[-:]?\s*([^.\n|]+))?',
@@ -221,7 +247,11 @@ def parse_hackernews_raw_to_jobs(raw_responses: List[Dict], location_data: Dict)
             location = extract_location(text, structured.get('location', ''))
             
             # Ensure proper data types and length limits
+            # Handle comment_id conversion to avoid .0 in URLs
+            if isinstance(comment_id, float):
+                comment_id = int(comment_id)
             job_id = str(comment_id) if comment_id else ""
+            
             company = str(company)[:100]
             title = str(title)[:100] 
             location = str(location)[:100]

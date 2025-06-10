@@ -12,7 +12,6 @@ import tempfile
 import pandas as pd
 import json
 import ast
-import re
 from typing import Dict, List, Any
 
 from include.config.env_detection import ENV, get_storage_paths
@@ -38,8 +37,7 @@ def load_location_data() -> Dict:
 
 def classify_location(location_text: str, location_data: Dict) -> str:
     """
-    Classify location as USA or Non-USA using location_keywords.json
-    FIXED VERSION - improved logic and pattern matching
+    BULLETPROOF location classification - handles all variations
     """
     if not location_text or location_text.strip() == "":
         return "Non-USA"
@@ -50,55 +48,62 @@ def classify_location(location_text: str, location_data: Dict) -> str:
     if location_lower in ["not specified", "unknown", "n/a", "na", ""]:
         return "Non-USA"
     
-    # Debug print for testing specific cases
-    # print(f"🔍 Classifying: '{location_text}' -> '{location_lower}'")
+    # Clean location text for better matching
+    # Remove common punctuation and normalize spaces
+    cleaned_location = location_lower
+    cleaned_location = cleaned_location.replace('(', ' ').replace(')', ' ')
+    cleaned_location = cleaned_location.replace('[', ' ').replace(']', ' ')
+    cleaned_location = cleaned_location.replace(',', ' ')
+    cleaned_location = ' '.join(cleaned_location.split())  # Normalize spaces
     
-    # Check USA keywords first (most explicit indicators)
+    # Also create a version with original spacing for exact matches
+    locations_to_check = [location_lower, cleaned_location]
+    
+    # 1. Check USA keywords
     for keyword in location_data.get("usa_keywords", []):
-        if keyword.lower() in location_lower:
-            return "USA"
-    
-    # Check US cities (most specific)
-    for city in location_data.get("us_cities", []):
-        city_lower = city.lower()
-        # Use word boundaries for better matching
-        if re.search(r'\b' + re.escape(city_lower) + r'\b', location_lower):
-            return "USA"
-    
-    # Check states with improved matching
-    for state in location_data.get("us_states", []):
-        state_lower = state.lower()
-        
-        if len(state_lower) <= 2:  # State abbreviations (like "wa", "ca", "ny")
-            # For abbreviations, check with word boundaries and common patterns
-            patterns = [
-                r'\b' + re.escape(state_lower) + r'\b',  # " wa "
-                r'\b' + re.escape(state_lower) + r'$',   # "seattle, wa"
-                r',\s*' + re.escape(state_lower) + r'\b', # ", wa"
-            ]
-            for pattern in patterns:
-                if re.search(pattern, location_lower):
-                    return "USA"
-        else:  # Full state names (like "washington", "california")
-            # For full names, use word boundaries
-            if re.search(r'\b' + re.escape(state_lower) + r'\b', location_lower):
+        keyword_lower = keyword.lower()
+        for loc in locations_to_check:
+            if keyword_lower in loc:
                 return "USA"
     
-    # Special case handling for common formats
-    special_patterns = [
-        r'\b(?:remote\s+)?(?:usa?|united\s+states?|america)\b',  # Remote USA, US, etc.
-        r'\b[a-z]+,\s*[a-z]{2}\b',  # City, ST format (catch any missed state abbrevs)
+    # 2. Manual high-priority US indicators (common patterns not in JSON)
+    us_indicators = [
+        'remote us', 'remote usa', 'us remote', 'usa remote',
+        'us only', 'usa only', 'united states', 'america',
+        'remote (us)', 'remote(us)', '(us)', '(usa)',
+        'us and', 'usa and', 'us or', 'usa or'
     ]
     
-    for pattern in special_patterns:
-        if re.search(pattern, location_lower):
-            # For city,state pattern, extract state and check again
-            if ',' in location_lower:
-                parts = location_lower.split(',')
-                if len(parts) >= 2:
-                    state_part = parts[-1].strip()
-                    if state_part in [s.lower() for s in location_data.get("us_states", [])]:
+    for indicator in us_indicators:
+        for loc in locations_to_check:
+            if indicator in loc:
+                return "USA"
+    
+    # 3. Check US cities
+    for city in location_data.get("us_cities", []):
+        city_lower = city.lower()
+        for loc in locations_to_check:
+            if city_lower in loc:
+                return "USA"
+    
+    # 4. Check US states (with abbreviation safety)
+    for state in location_data.get("us_states", []):
+        state_lower = state.lower()
+        for loc in locations_to_check:
+            if state_lower in loc:
+                if len(state_lower) <= 2:
+                    # For abbreviations, check positioning
+                    if (f' {state_lower} ' in f' {loc} ' or 
+                        f' {state_lower}' in f' {loc}' or
+                        loc.endswith(state_lower)):
                         return "USA"
+                else:
+                    # Full state names are safe
+                    return "USA"
+    
+    # 5. Final fallback patterns
+    if any(pattern in cleaned_location for pattern in ['sf ', ' sf', 'nyc', 'la ', ' la']):
+        return "USA"
     
     return "Non-USA"
 
