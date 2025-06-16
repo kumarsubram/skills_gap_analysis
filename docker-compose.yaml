@@ -42,29 +42,10 @@ services:
       - -c
       - |
         echo "Creating missing opt dirs if missing:"
-        mkdir -v -p /opt/airflow/{logs,dags,plugins,config,include,data}
-        
+        mkdir -v -p /opt/airflow/{logs,dags,plugins,config}
         echo "Airflow version:"
         /entrypoint airflow version
-        
-        echo "Change ownership of files in /opt/airflow to ${AIRFLOW_UID:-50000}:0"
-        chown -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/
-        
-        echo "Running DB upgrade..."
-        /entrypoint airflow db upgrade
-        
-        echo "Creating admin user..."
-        /entrypoint airflow users create \
-          --username "${_AIRFLOW_WWW_USER_USERNAME:-airflow}" \
-          --firstname Admin \
-          --lastname User \
-          --role Admin \
-          --email admin@example.com \
-          --password "${_AIRFLOW_WWW_USER_PASSWORD:-airflow}" || echo "User creation failed or user exists"
-        
         echo "✅ Airflow initialization complete!"
-        echo "Exiting successfully..."
-        exit 0
     environment:
       AIRFLOW__CORE__EXECUTOR: CeleryExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
