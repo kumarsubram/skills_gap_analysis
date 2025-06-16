@@ -11,7 +11,7 @@ webserver_config.py
 airflow.cfg
 airflow.db
 data/
-deploy_to_vps.sh
+*.sh
 
 # ===== CRITICAL ADDITIONS FOR PRODUCTION =====
 
