@@ -35,7 +35,6 @@ services:
     restart: always
 
   airflow-init:
-    exclude_from_hc: true
     restart: "no"
     build: .
     entrypoint: /bin/bash
