@@ -44,17 +44,6 @@ services:
         echo "▶ Creating folders..."
         mkdir -p /opt/airflow/{logs,dags,plugins,config,include,data}
 
-        echo "▶ Checking Airflow version..."
-        /entrypoint airflow version
-        if [ $? -ne 0 ]; then echo "❌ Airflow version check failed"; exit 1; fi
-
-        echo "▶ Running airflow config list to generate config file..."
-        /entrypoint airflow config list > /dev/null
-        if [ $? -ne 0 ]; then echo "❌ Config list failed"; exit 1; fi
-
-        echo "▶ Listing contents of airflow dirs..."
-        ls -la /opt/airflow/{logs,dags,plugins,config}
-
         echo "▶ Running DB upgrade..."
         airflow db upgrade
         if [ $? -ne 0 ]; then echo "❌ DB upgrade failed"; exit 1; fi
@@ -69,12 +58,7 @@ services:
           --password "${_AIRFLOW_WWW_USER_PASSWORD:-airflow}"
         if [ $? -ne 0 ]; then echo "❌ User creation failed"; exit 1; fi
 
-        echo "▶ Fixing ownership of airflow dirs..."
-        chown -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/
-        if [ $? -ne 0 ]; then echo "❌ chown failed"; exit 1; fi
-
-        echo "✅ Airflow initialization complete!"
-        exit 0
+        echo "✅ Airflow init complete"
     environment:
       AIRFLOW__CORE__EXECUTOR: CeleryExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
