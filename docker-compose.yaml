@@ -68,7 +68,229 @@ services:
       postgres:
         condition: service_healthy
 
+  airflow-apiserver:
+    build: .
+    command: api-server
+    ports:
+      - "8085:8080"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
+      AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-}
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://airflow-apiserver:8080/execution/'
+      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+      AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: ${AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL:-30}
+      AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL: ${AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL:-10}
+      AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: ${AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT:-30}
+      _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-apache-airflow-providers-apache-spark}
+      AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
+    volumes:
+      - airflow-dags:/opt/airflow/dags
+      - airflow-logs:/opt/airflow/logs
+      - airflow-config:/opt/airflow/config
+      - airflow-plugins:/opt/airflow/plugins
+      - airflow-include:/opt/airflow/include
+      - airflow-data:/opt/airflow/data
+    user: "${AIRFLOW_UID:-50000}:0"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/version"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    build: .
+    command: scheduler
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
+      AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-}
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://airflow-apiserver:8080/execution/'
+      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+      AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: ${AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL:-30}
+      AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL: ${AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL:-10}
+      AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: ${AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT:-30}
+      _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-apache-airflow-providers-apache-spark}
+      AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
+    volumes:
+      - airflow-dags:/opt/airflow/dags
+      - airflow-logs:/opt/airflow/logs
+      - airflow-config:/opt/airflow/config
+      - airflow-plugins:/opt/airflow/plugins
+      - airflow-include:/opt/airflow/include
+      - airflow-data:/opt/airflow/data
+    user: "${AIRFLOW_UID:-50000}:0"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-worker:
+    build: .
+    command: celery worker
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
+      AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-}
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://airflow-apiserver:8080/execution/'
+      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+      AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: ${AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL:-30}
+      AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL: ${AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL:-10}
+      AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: ${AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT:-30}
+      _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-apache-airflow-providers-apache-spark}
+      AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
+      DUMB_INIT_SETSID: "0"
+    volumes:
+      - airflow-dags:/opt/airflow/dags
+      - airflow-logs:/opt/airflow/logs
+      - airflow-config:/opt/airflow/config
+      - airflow-plugins:/opt/airflow/plugins
+      - airflow-include:/opt/airflow/include
+      - airflow-data:/opt/airflow/data
+    user: "${AIRFLOW_UID:-50000}:0"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - 'celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}" || celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"'
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      airflow-apiserver:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-dag-processor:
+    build: .
+    command: dag-processor
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
+      AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-}
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://airflow-apiserver:8080/execution/'
+      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+      AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: ${AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL:-30}
+      AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL: ${AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL:-10}
+      AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: ${AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT:-30}
+      _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-apache-airflow-providers-apache-spark}
+      AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
+    volumes:
+      - airflow-dags:/opt/airflow/dags
+      - airflow-logs:/opt/airflow/logs
+      - airflow-config:/opt/airflow/config
+      - airflow-plugins:/opt/airflow/plugins
+      - airflow-include:/opt/airflow/include
+      - airflow-data:/opt/airflow/data
+    user: "${AIRFLOW_UID:-50000}:0"
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-triggerer:
+    build: .
+    command: triggerer
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
+      AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-}
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://airflow-apiserver:8080/execution/'
+      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+      AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: ${AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL:-30}
+      AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL: ${AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL:-10}
+      AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: ${AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT:-30}
+      _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-apache-airflow-providers-apache-spark}
+      AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
+    volumes:
+      - airflow-dags:/opt/airflow/dags
+      - airflow-logs:/opt/airflow/logs
+      - airflow-config:/opt/airflow/config
+      - airflow-plugins:/opt/airflow/plugins
+      - airflow-include:/opt/airflow/include
+      - airflow-data:/opt/airflow/data
+    user: "${AIRFLOW_UID:-50000}:0"
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
 
 volumes:
   postgres-db-volume:
   redis-data:
+  airflow-dags:
+  airflow-logs:
+  airflow-config:
+  airflow-plugins:
+  airflow-include:
+  airflow-data:
