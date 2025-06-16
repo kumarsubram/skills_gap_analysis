@@ -41,56 +41,67 @@ services:
     command:
       - -c
       - |
+        set -e  # Exit on any error for debugging
+        
         echo "🚀 Starting Airflow initialization..."
+        echo "Current user: $(whoami)"
+        echo "Current directory: $(pwd)"
         
         # Set AIRFLOW_UID if not provided
-        if [[ -z "${AIRFLOW_UID}" ]]; then
-          echo "⚠️  AIRFLOW_UID not set, using default..."
-          export AIRFLOW_UID=50000
-        fi
-        
-        # Resource checks (simplified for Coolify)
-        echo "📊 Checking system resources..."
-        one_meg=1048576
-        mem_available=$$(($$(getconf _PHYS_PAGES) * $$(getconf PAGE_SIZE) / one_meg))
-        echo "Memory available: $$(numfmt --to iec $$((mem_available * one_meg)))"
+        export AIRFLOW_UID=${AIRFLOW_UID:-50000}
+        echo "Using AIRFLOW_UID: $AIRFLOW_UID"
         
         # Create all required directories
         echo "📁 Creating Airflow directories..."
-        mkdir -v -p /opt/airflow/{logs,dags,plugins,config,include,data}
+        mkdir -p /opt/airflow/{logs,dags,plugins,config,include,data}
         
-        # Fix ownership BEFORE running Airflow commands
+        # Set ownership (as root initially)
         echo "🔧 Setting file ownership..."
-        chown -R "${AIRFLOW_UID}:0" /opt/airflow/
+        chown -R "$AIRFLOW_UID:0" /opt/airflow/
         
-        # Initialize Airflow configuration
+        # Test if airflow command works
+        echo "🧪 Testing Airflow installation..."
+        airflow version || {
+          echo "❌ Airflow command failed - checking installation"
+          which python3
+          python3 -c "import airflow; print(f'Airflow version: {airflow.__version__}')" || {
+            echo "❌ Airflow Python import failed"
+            exit 1
+          }
+        }
+        
+        # Initialize Airflow configuration (as root, then we'll fix ownership)
         echo "⚙️  Initializing Airflow config..."
-        su-exec "${AIRFLOW_UID}:0" airflow config list >/dev/null
+        export AIRFLOW__CORE__DAGS_FOLDER=/opt/airflow/dags
+        airflow config list >/dev/null || {
+          echo "❌ Airflow config initialization failed"
+          exit 1
+        }
         
         # Database migration
         echo "🗄️  Running database upgrade..."
-        su-exec "${AIRFLOW_UID}:0" airflow db upgrade
-        if [ $? -ne 0 ]; then 
+        airflow db migrate || airflow db upgrade || {
           echo "❌ Database upgrade failed"
           exit 1
-        fi
+        }
         
-        # Create admin user
+        # Create admin user (ignore if already exists)
         echo "👤 Creating admin user..."
-        su-exec "${AIRFLOW_UID}:0" airflow users create \
+        airflow users create \
           --username "${_AIRFLOW_WWW_USER_USERNAME:-airflow}" \
           --firstname Admin \
           --lastname User \
           --role Admin \
           --email admin@example.com \
-          --password "${_AIRFLOW_WWW_USER_PASSWORD:-airflow}" || true
+          --password "${_AIRFLOW_WWW_USER_PASSWORD:-airflow}" || {
+          echo "⚠️  User creation failed or user already exists (continuing...)"
+        }
         
         # Final ownership fix
         echo "🔐 Final ownership adjustment..."
-        chown -R "${AIRFLOW_UID}:0" /opt/airflow/{logs,dags,plugins,config,include,data}
+        chown -R "$AIRFLOW_UID:0" /opt/airflow/{logs,dags,plugins,config,include,data}
         
         echo "✅ Airflow initialization completed successfully!"
-        echo "🎉 Ready for other services to start..."
     environment:
       AIRFLOW__CORE__EXECUTOR: CeleryExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
