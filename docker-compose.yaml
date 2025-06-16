@@ -62,7 +62,6 @@ services:
           --email admin@example.com \
           --password "${_AIRFLOW_WWW_USER_PASSWORD:-airflow}" || echo "User creation failed or user exists"
         
-        echo "🔧 Setting up Airflow connections..."
         echo "✅ Airflow initialization complete!"
         exit 0
     environment:
