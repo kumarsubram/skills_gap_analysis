@@ -41,43 +41,28 @@ services:
     command:
       - -c
       - |
-        if [[ -z "${AIRFLOW_UID}" ]]; then
-          echo "⚠️  AIRFLOW_UID not set — falling back to current UID"
-          export AIRFLOW_UID=$(id -u)
-        fi
+        LOGFILE="/host-init-logs/airflow-init.log"
+        echo "▶ Starting Airflow Init at $(date)" | tee -a "$LOGFILE"
 
-        echo "▶ Creating folders..."
-        mkdir -p /opt/airflow/{logs,dags,plugins,config,include,data}
+        echo "▶ Creating folders..." | tee -a "$LOGFILE"
+        mkdir -p /opt/airflow/{logs,dags,plugins,config,include,data} 2>&1 | tee -a "$LOGFILE"
 
-        echo "▶ Checking Airflow CLI..."
-        /entrypoint airflow version
-        if [ $? -ne 0 ]; then echo "❌ Airflow CLI failed"; exit 1; fi
+        echo "▶ Running DB upgrade..." | tee -a "$LOGFILE"
+        airflow db upgrade 2>&1 | tee -a "$LOGFILE"
+        if [ $? -ne 0 ]; then echo "❌ DB upgrade failed at $(date)" | tee -a "$LOGFILE"; exit 1; fi
 
-        echo "▶ Generating default config..."
-        /entrypoint airflow config list > /dev/null
-        if [ $? -ne 0 ]; then echo "❌ Config list failed"; exit 1; fi
-
-        echo "▶ Listing contents of airflow dirs..."
-        ls -la /opt/airflow/{logs,dags,plugins,config}
-
-        echo "▶ Running DB upgrade..."
-        airflow db upgrade
-        if [ $? -ne 0 ]; then echo "❌ DB upgrade failed"; exit 1; fi
-
-        echo "▶ Creating admin user..."
+        echo "▶ Creating admin user..." | tee -a "$LOGFILE"
         airflow users create \
           --username "${_AIRFLOW_WWW_USER_USERNAME:-airflow}" \
           --firstname Admin \
           --lastname User \
           --role Admin \
           --email admin@example.com \
-          --password "${_AIRFLOW_WWW_USER_PASSWORD:-airflow}"
-        if [ $? -ne 0 ]; then echo "❌ User creation failed"; exit 1; fi
+          --password "${_AIRFLOW_WWW_USER_PASSWORD:-airflow}" 2>&1 | tee -a "$LOGFILE"
+        if [ $? -ne 0 ]; then echo "❌ User creation failed at $(date)" | tee -a "$LOGFILE"; exit 1; fi
 
-        echo "▶ Fixing ownership of airflow dirs..."
-        chown -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/
-
-        echo "✅ Airflow initialization complete!"
+        echo "✅ Airflow init complete at $(date)" | tee -a "$LOGFILE"
+        sleep 3
         exit 0
     environment:
       AIRFLOW__CORE__EXECUTOR: CeleryExecutor
@@ -95,6 +80,7 @@ services:
       - airflow-plugins:/opt/airflow/plugins
       - airflow-include:/opt/airflow/include
       - airflow-data:/opt/airflow/data
+      - ./airflow-init-logs:/host-init-logs
     user: "0:0"
     depends_on:
       redis:
