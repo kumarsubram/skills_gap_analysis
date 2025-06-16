@@ -41,29 +41,24 @@ services:
     command:
       - -c
       - |
-        LOGFILE="/host-init-logs/airflow-init.log"
-        echo "▶ Starting Airflow Init at $(date)" | tee -a "$LOGFILE"
+        echo "▶ Creating folders..."
+        mkdir -p /opt/airflow/{logs,dags,plugins,config,include,data}
 
-        echo "▶ Creating folders..." | tee -a "$LOGFILE"
-        mkdir -p /opt/airflow/{logs,dags,plugins,config,include,data} 2>&1 | tee -a "$LOGFILE"
+        echo "▶ Running DB upgrade..."
+        airflow db upgrade
+        if [ $? -ne 0 ]; then echo "❌ DB upgrade failed"; exit 1; fi
 
-        echo "▶ Running DB upgrade..." | tee -a "$LOGFILE"
-        airflow db upgrade 2>&1 | tee -a "$LOGFILE"
-        if [ $? -ne 0 ]; then echo "❌ DB upgrade failed at $(date)" | tee -a "$LOGFILE"; exit 1; fi
-
-        echo "▶ Creating admin user..." | tee -a "$LOGFILE"
+        echo "▶ Creating admin user..."
         airflow users create \
           --username "${_AIRFLOW_WWW_USER_USERNAME:-airflow}" \
           --firstname Admin \
           --lastname User \
           --role Admin \
           --email admin@example.com \
-          --password "${_AIRFLOW_WWW_USER_PASSWORD:-airflow}" 2>&1 | tee -a "$LOGFILE"
-        if [ $? -ne 0 ]; then echo "❌ User creation failed at $(date)" | tee -a "$LOGFILE"; exit 1; fi
+          --password "${_AIRFLOW_WWW_USER_PASSWORD:-airflow}"
+        if [ $? -ne 0 ]; then echo "❌ User creation failed"; exit 1; fi
 
-        echo "✅ Airflow init complete at $(date)" | tee -a "$LOGFILE"
-        sleep 3
-        exit 0
+        echo "✅ Airflow init complete"
     environment:
       AIRFLOW__CORE__EXECUTOR: CeleryExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
@@ -80,7 +75,6 @@ services:
       - airflow-plugins:/opt/airflow/plugins
       - airflow-include:/opt/airflow/include
       - airflow-data:/opt/airflow/data
-      - ./airflow-init-logs:/host-init-logs
     user: "0:0"
     depends_on:
       redis:
