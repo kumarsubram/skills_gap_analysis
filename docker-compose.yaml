@@ -41,67 +41,37 @@ services:
     command:
       - -c
       - |
-        set -e  # Exit on any error for debugging
-        
-        echo "🚀 Starting Airflow initialization..."
-        echo "Current user: $(whoami)"
-        echo "Current directory: $(pwd)"
-        
-        # Set AIRFLOW_UID if not provided
-        export AIRFLOW_UID=${AIRFLOW_UID:-50000}
-        echo "Using AIRFLOW_UID: $AIRFLOW_UID"
-        
-        # Create all required directories
-        echo "📁 Creating Airflow directories..."
+        echo "Creating missing opt dirs if missing:"
         mkdir -p /opt/airflow/{logs,dags,plugins,config,include,data}
         
-        # Set ownership (as root initially)
-        echo "🔧 Setting file ownership..."
-        chown -R "$AIRFLOW_UID:0" /opt/airflow/
+        echo "Airflow version:"
+        airflow version
         
-        # Test if airflow command works
-        echo "🧪 Testing Airflow installation..."
-        airflow version || {
-          echo "❌ Airflow command failed - checking installation"
-          which python3
-          python3 -c "import airflow; print(f'Airflow version: {airflow.__version__}')" || {
-            echo "❌ Airflow Python import failed"
-            exit 1
-          }
-        }
+        echo "Files in shared volumes:"
+        ls -la /opt/airflow/{logs,dags,plugins,config} || true
         
-        # Initialize Airflow configuration (as root, then we'll fix ownership)
-        echo "⚙️  Initializing Airflow config..."
-        export AIRFLOW__CORE__DAGS_FOLDER=/opt/airflow/dags
-        airflow config list >/dev/null || {
-          echo "❌ Airflow config initialization failed"
-          exit 1
-        }
+        echo "Running airflow config list to create default config file if missing."
+        airflow config list >/dev/null
         
-        # Database migration
-        echo "🗄️  Running database upgrade..."
-        airflow db migrate || airflow db upgrade || {
-          echo "❌ Database upgrade failed"
-          exit 1
-        }
+        echo "Change ownership of files in /opt/airflow to ${AIRFLOW_UID:-50000}:0"
+        chown -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/
         
-        # Create admin user (ignore if already exists)
-        echo "👤 Creating admin user..."
+        echo "Change ownership of files in shared volumes to ${AIRFLOW_UID:-50000}:0"
+        chown -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/{logs,dags,plugins,config,include,data}
+        
+        echo "Running DB upgrade..."
+        airflow db upgrade
+        
+        echo "Creating admin user..."
         airflow users create \
           --username "${_AIRFLOW_WWW_USER_USERNAME:-airflow}" \
           --firstname Admin \
           --lastname User \
           --role Admin \
           --email admin@example.com \
-          --password "${_AIRFLOW_WWW_USER_PASSWORD:-airflow}" || {
-          echo "⚠️  User creation failed or user already exists (continuing...)"
-        }
+          --password "${_AIRFLOW_WWW_USER_PASSWORD:-airflow}" || echo "User might already exist"
         
-        # Final ownership fix
-        echo "🔐 Final ownership adjustment..."
-        chown -R "$AIRFLOW_UID:0" /opt/airflow/{logs,dags,plugins,config,include,data}
-        
-        echo "✅ Airflow initialization completed successfully!"
+        echo "✅ Airflow initialization complete!"
     environment:
       AIRFLOW__CORE__EXECUTOR: CeleryExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
