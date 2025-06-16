@@ -34,7 +34,7 @@ services:
       start_period: 30s
     restart: always
 
-  airflow-init:
+airflow-init:
     restart: "no"
     build: .
     entrypoint: /bin/bash
@@ -47,28 +47,42 @@ services:
         echo "Airflow version:"
         /entrypoint airflow version
         
+        echo "Files in shared volumes:"
+        ls -la /opt/airflow/{logs,dags,plugins,config} || true
+        
+        echo "Running airflow config list to create default config file if missing."
+        /entrypoint airflow config list >/dev/null
+        
         echo "Change ownership of files in /opt/airflow to ${AIRFLOW_UID:-50000}:0"
         chown -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/
         
-        echo "🗄️ Running DB upgrade..."
-        /entrypoint airflow db upgrade
+        echo "Change ownership of files in shared volumes to ${AIRFLOW_UID:-50000}:0"
+        chown -v -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/{logs,dags,plugins,config,include,data}
         
-        echo "👤 Creating admin user..."
-        /entrypoint airflow users create \
-          --username "${_AIRFLOW_WWW_USER_USERNAME:-airflow}" \
-          --firstname Admin \
-          --lastname User \
-          --role Admin \
-          --email admin@example.com \
-          --password "${_AIRFLOW_WWW_USER_PASSWORD:-airflow}" || echo "User creation failed or user exists"
+        echo "Files in shared volumes:"
+        ls -la /opt/airflow/{logs,dags,plugins,config} || true
         
+        echo "🔧 Setting up Airflow connections..."
         echo "✅ Airflow initialization complete!"
-        exit 0
     environment:
+      # Core Airflow configuration
       AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
       AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
       AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-}
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://airflow-apiserver:8080/execution/'
+      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+      AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: ${AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL:-30}
+      AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL: ${AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL:-10}
+      AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: ${AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT:-30}
+      _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-apache-airflow-providers-apache-spark}
+      AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
+      
+      # ✅ CRITICAL: These trigger automatic DB migration and user creation
       _AIRFLOW_DB_MIGRATE: 'true'
       _AIRFLOW_WWW_USER_CREATE: 'true'
       _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
