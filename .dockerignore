@@ -1,0 +1,35 @@
+# Exclude from Docker build context for faster builds
+.git
+.gitignore
+README.md
+.env
+.venv
+logs/
+data/
+tests/
+*.log
+
+# Docker files
+docker-compose*.yml
+Dockerfile*
+.dockerignore
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Documentation
+docs/
+*.md
+
+# CI/CD
+.github/
+deploy_to_vps.sh

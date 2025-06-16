@@ -1,0 +1,112 @@
+# Existing entries
+.git
+.env
+.DS_Store
+airflow_settings.yaml
+__pycache__/
+astro
+.venv
+airflow-webserver.pid
+webserver_config.py
+airflow.cfg
+airflow.db
+data/
+deploy_to_vps.sh
+
+# ===== CRITICAL ADDITIONS FOR PRODUCTION =====
+
+# Airflow Logs - Never commit these!
+logs/
+*.log
+
+# Docker volumes and cache
+docker-compose.override.yml
+.docker/
+docker-volumes/
+
+# Spark temporary files
+spark-warehouse/
+metastore_db/
+derby.log
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Python bytecode and artifacts
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Secrets and credentials
+secrets/
+*.key
+*.pem
+*.crt
+*.csr
+*.p12
+credentials.json
+service-account.json
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+*.backup
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+# Test artifacts
+.pytest_cache/
+.tox/
+.nox/
