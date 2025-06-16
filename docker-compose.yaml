@@ -41,8 +41,24 @@ services:
     command:
       - -c
       - |
+        if [[ -z "${AIRFLOW_UID}" ]]; then
+          echo "⚠️  AIRFLOW_UID not set — falling back to current UID"
+          export AIRFLOW_UID=$(id -u)
+        fi
+
         echo "▶ Creating folders..."
         mkdir -p /opt/airflow/{logs,dags,plugins,config,include,data}
+
+        echo "▶ Checking Airflow CLI..."
+        /entrypoint airflow version
+        if [ $? -ne 0 ]; then echo "❌ Airflow CLI failed"; exit 1; fi
+
+        echo "▶ Generating default config..."
+        /entrypoint airflow config list > /dev/null
+        if [ $? -ne 0 ]; then echo "❌ Config list failed"; exit 1; fi
+
+        echo "▶ Listing contents of airflow dirs..."
+        ls -la /opt/airflow/{logs,dags,plugins,config}
 
         echo "▶ Running DB upgrade..."
         airflow db upgrade
@@ -58,7 +74,11 @@ services:
           --password "${_AIRFLOW_WWW_USER_PASSWORD:-airflow}"
         if [ $? -ne 0 ]; then echo "❌ User creation failed"; exit 1; fi
 
-        echo "✅ Airflow init complete"
+        echo "▶ Fixing ownership of airflow dirs..."
+        chown -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/
+
+        echo "✅ Airflow initialization complete!"
+        exit 0
     environment:
       AIRFLOW__CORE__EXECUTOR: CeleryExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
