@@ -40,7 +40,7 @@ class EnvironmentDetector:
                 return os.path.join(os.path.expanduser('~'), 'airflow-spark')
         else:
             # VPS uses /usr/local/airflow  
-            return '/usr/local/airflow'
+            return '/opt/airflow'
     
     def _get_environment_config(self) -> Dict:
         """Get environment-specific configuration - MinIO everywhere!"""
