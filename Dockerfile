@@ -50,5 +50,6 @@ RUN echo "📦 Installing critical Python packages at build time..." && \
     pip install --no-cache-dir \
     apache-airflow-providers-apache-spark \
     deltalake \
+    pyarrow \
     apache-airflow-providers-fab==2.0.2 && \
     echo "✅ Python packages installed successfully"
