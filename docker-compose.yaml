@@ -68,15 +68,14 @@ x-airflow-common:
     AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: ${AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL:-30}
     AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL: ${AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL:-10}
     AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: ${AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT:-30}
-    # Fix the pip requirements to actually use the .env value
-    #_PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-apache-airflow-providers-apache-spark apache-airflow-providers-fab==2.0.2}
     # Custom config
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
-    # MinIO credentials from .env file
     MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
     MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
     MINIO_ENDPOINT: ${MINIO_ENDPOINT}
     MINIO_BUCKET: ${MINIO_BUCKET}
+    AIRFLOW_ENV: ${AIRFLOW_ENV}
+    VPS_IP: ${VPS_IP}
     SPARK_LOCAL_DIRS: /opt/airflow/spark-tmp
     TMPDIR: /opt/airflow/spark-tmp
     JAVA_IO_TMPDIR: /opt/airflow/spark-tmp  
