@@ -110,3 +110,10 @@ coverage.xml
 .pytest_cache/
 .tox/
 .nox/
+# Jupyter Notebook files
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+notebooks/.jupyter/
+notebooks/**/Untitled*.ipynb
+notebooks/**/__pycache__/
+notebooks/**/*.pyc

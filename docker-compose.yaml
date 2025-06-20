@@ -69,9 +69,17 @@ x-airflow-common:
     AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL: ${AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL:-10}
     AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: ${AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT:-30}
     # Fix the pip requirements to actually use the .env value
-    _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-apache-airflow-providers-apache-spark apache-airflow-providers-fab==2.0.2}
+    #_PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-apache-airflow-providers-apache-spark apache-airflow-providers-fab==2.0.2}
     # Custom config
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
+    # MinIO credentials from .env file
+    MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+    MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+    MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+    MINIO_BUCKET: ${MINIO_BUCKET}
+    SPARK_LOCAL_DIRS: /opt/airflow/spark-tmp
+    TMPDIR: /opt/airflow/spark-tmp
+    JAVA_IO_TMPDIR: /opt/airflow/spark-tmp  
   volumes:
     - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
     - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
@@ -91,11 +99,18 @@ services:
   postgres:
     image: postgres:15
     environment:
-      POSTGRES_USER: airflow
-      POSTGRES_PASSWORD: airflow
-      POSTGRES_DB: airflow
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - postgres-db-volume:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          memory: 512MB
+        reservations:
+          memory: 256MB
+    command: postgres -c shared_buffers=128MB -c effective_cache_size=256MB -c max_connections=50
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "airflow"]
       interval: 10s
@@ -116,6 +131,13 @@ services:
       retries: 50
       start_period: 30s
     restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 256MB
+        reservations:
+          memory: 128MB
+
 
   airflow-apiserver:
     <<: *airflow-common
@@ -295,8 +317,8 @@ services:
       <<: *airflow-common-env
       _AIRFLOW_DB_MIGRATE: 'true'
       _AIRFLOW_WWW_USER_CREATE: 'true'
-      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
-      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD}
       _PIP_ADDITIONAL_REQUIREMENTS: ''
     user: "0:0"
 
@@ -354,7 +376,7 @@ services:
       - SPARK_CONF_DIR=/opt/spark/conf
       - PYSPARK_PYTHON=python3.12
       - PYSPARK_DRIVER_PYTHON=python3.12
-      - SPARK_OPTS=--packages io.delta:delta-spark_2.13:4.0.0,org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.0 --conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog
+      - SPARK_OPTS=--conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog
     ports:
       - "8060:8080"  # Spark Master Web UI
       - "7077:7077"  # Spark Master Port
@@ -382,45 +404,26 @@ services:
     environment:
       - SPARK_MASTER=spark://spark-master:7077
       - SPARK_WORKER_CORES=${SPARK_WORKER_CORES:-2}
-      - SPARK_WORKER_MEMORY=${SPARK_WORKER_MEMORY:-2G}
+      - SPARK_WORKER_MEMORY=${SPARK_WORKER_MEMORY:-6G}
       - SPARK_WORKER_PORT=8881
       - SPARK_WORKER_WEBUI_PORT=8081
       - SPARK_CONF_DIR=/opt/spark/conf
       - PYSPARK_PYTHON=python3.12
       - PYSPARK_DRIVER_PYTHON=python3.12
-      - SPARK_OPTS=--packages io.delta:delta-spark_2.13:4.0.0,org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.0 --conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog
+      - SPARK_OPTS=--conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog
+      # ADD THESE MINIO ENVIRONMENT VARIABLES:
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT}
+      - MINIO_BUCKET=${MINIO_BUCKET}
     ports:
       - "8061:8081"  # Worker 1 Web UI
-    volumes:
-      - spark-logs:/opt/spark/logs
-      - spark-events:/opt/spark/work-dir
-      - ${AIRFLOW_PROJ_DIR:-.}/data:/opt/spark/data
-      - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/spark/config
-    depends_on:
-      spark-master:
-        condition: service_healthy
-    restart: always
-
-  # Spark Worker 2  
-  spark-worker-2:
-    build:
-      context: .
-      dockerfile: Dockerfile.spark
-    container_name: spark-worker-2
-    hostname: spark-worker-2
-    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
-    environment:
-      - SPARK_MASTER=spark://spark-master:7077
-      - SPARK_WORKER_CORES=${SPARK_WORKER_CORES:-2}
-      - SPARK_WORKER_MEMORY=${SPARK_WORKER_MEMORY:-2G}
-      - SPARK_WORKER_PORT=8882
-      - SPARK_WORKER_WEBUI_PORT=8081
-      - SPARK_CONF_DIR=/opt/spark/conf
-      - PYSPARK_PYTHON=python3.12
-      - PYSPARK_DRIVER_PYTHON=python3.12
-      - SPARK_OPTS=--packages io.delta:delta-spark_2.13:4.0.0,org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.0 --conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog
-    ports:
-      - "8062:8081"  # Worker 2 Web UI
+    deploy:
+      resources:
+        limits:
+          memory: 7G
+        reservations:
+          memory: 6G
     volumes:
       - spark-logs:/opt/spark/logs
       - spark-events:/opt/spark/work-dir
@@ -463,8 +466,16 @@ services:
       - 'KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:29092,PLAINTEXT_HOST://${VPS_IP}:9092'
       - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
       - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
+      - KAFKA_HEAP_OPTS=-Xmx1G -Xms1G
+      - KAFKA_JVM_PERFORMANCE_OPTS=-server -XX:+UseG1GC -XX:MaxGCPauseMillis=20
     volumes:
       - 'kafka-data:/var/lib/kafka/data'
+    deploy:
+      resources:
+        limits:
+          memory: 1.5G
+        reservations:
+          memory: 1G
     healthcheck:
       test:
         - CMD-SHELL
@@ -485,8 +496,8 @@ services:
       - KAFKA_CLUSTERS_0_NAME=streaming-cluster
       - 'KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:29092'
       - AUTH_TYPE=LOGIN_FORM
-      - SPRING_SECURITY_USER_NAME=admin
-      - SPRING_SECURITY_USER_PASSWORD=adminks123
+      - SPRING_SECURITY_USER_NAME=${SPRING_SECURITY_USER_NAME}
+      - SPRING_SECURITY_USER_PASSWORD=${SPRING_SECURITY_USER_PASSWORD}
     volumes:
       - '/tmp:/tmp'
     healthcheck:
@@ -535,6 +546,48 @@ services:
       /usr/bin/mc policy set public myminio/kafka-data;
       exit 0;
       "
+
+  # ===== JUPYTER NOTEBOOK SERVICE =====
+  jupyter-spark:
+    build:
+      context: .
+      dockerfile: Dockerfile.jupyter
+    container_name: jupyter-spark
+    hostname: jupyter-spark
+    ports:
+      - "8888:8888"  # Jupyter Lab
+      - "4040:4040"  # Spark UI (driver)
+      - "4041:4041"  # Additional Spark UIs
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+      - JUPYTER_TOKEN=${JUPYTER_TOKEN}
+      - SPARK_MASTER=spark://spark-master:7077
+      - SPARK_HOME=/opt/spark
+      - PYTHONPATH=/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9.7-src.zip
+      - PYSPARK_PYTHON=python3.12
+      - PYSPARK_DRIVER_PYTHON=python3.12
+      # MinIO S3 Configuration
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT}
+      - MINIO_BUCKET=${MINIO_BUCKET}
+      # Java configuration
+      - JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+    volumes:
+      - ${AIRFLOW_PROJ_DIR:-.}/notebooks:/home/jovyan/work
+      - ${AIRFLOW_PROJ_DIR:-.}/data:/home/jovyan/data
+      - ${AIRFLOW_PROJ_DIR:-.}/include:/home/jovyan/include
+      - spark-logs:/opt/spark/logs
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8888/lab?"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
 volumes:
   postgres-db-volume:

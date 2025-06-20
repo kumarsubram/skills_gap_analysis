@@ -3,8 +3,8 @@ from airflow import DAG
 from airflow.operators.bash import BashOperator
 
 dag = DAG(
-    'spark_clean_test',
-    description='Clean Spark test without copy commands',
+    'simple_spark_check',
+    description='Clean Spark test',
     start_date=datetime(2025, 6, 15),
     schedule=None,
     catchup=False,
@@ -22,7 +22,7 @@ spark_job = BashOperator(
         --conf spark.driver.memory=512m \
         --conf spark.executor.cores=1 \
         --deploy-mode client \
-        /opt/airflow/include/spark_jobs/clean_spark_test.py
+        /opt/airflow/include/spark_jobs/simple_spark_test.py
     
     echo "✅ Job completed!"
     ''',
