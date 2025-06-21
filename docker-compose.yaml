@@ -376,12 +376,13 @@ services:
       - PYSPARK_PYTHON=python3.12
       - PYSPARK_DRIVER_PYTHON=python3.12
       - SPARK_OPTS=--conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog
+      - SPARK_WORKER_DIR=/opt/spark/work
     ports:
       - "8060:8080"  # Spark Master Web UI
       - "7077:7077"  # Spark Master Port
     volumes:
       - spark-logs:/opt/spark/logs
-      - spark-events:/opt/spark/work-dir
+      - spark-events:/opt/spark/work
       - ${AIRFLOW_PROJ_DIR:-.}/data:/opt/spark/data
       - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/spark/config
     healthcheck:
@@ -410,6 +411,7 @@ services:
       - PYSPARK_PYTHON=python3.12
       - PYSPARK_DRIVER_PYTHON=python3.12
       - SPARK_OPTS=--conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog
+      - SPARK_WORKER_DIR=/opt/spark/work
       # ADD THESE MINIO ENVIRONMENT VARIABLES:
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
