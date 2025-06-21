@@ -425,7 +425,7 @@ services:
           memory: 6G
     volumes:
       - spark-logs:/opt/spark/logs
-      - spark-events:/opt/spark/work-dir
+      - spark-events:/opt/spark/work
       - ${AIRFLOW_PROJ_DIR:-.}/data:/opt/spark/data
       - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/spark/config
     depends_on:
