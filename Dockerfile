@@ -51,5 +51,7 @@ RUN echo "📦 Installing critical Python packages at build time..." && \
     apache-airflow-providers-apache-spark \
     deltalake \
     pyarrow \
-    apache-airflow-providers-fab==2.0.2 && \
+    apache-airflow-providers-fab==2.0.2 \
+    confluent-kafka \
+    requests && \
     echo "✅ Python packages installed successfully"

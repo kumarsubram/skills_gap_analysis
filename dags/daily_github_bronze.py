@@ -18,8 +18,8 @@ from airflow.operators.python import PythonOperator
 
 # CONFIGURATION
 START_DATE = "2024-12-31"
-SKIP_START = None  # Set to "2025-01-15" to skip dates
-SKIP_END = None    # Set to "2025-01-20" to skip dates  
+SKIP_START = "2024-01-01"  # Set to "2025-01-15" to skip dates
+SKIP_END = "2024-04-11"    # Set to "2025-01-20" to skip dates  
 MIN_RECORDS_THRESHOLD = 5  # Bronze complete if > 5 records
 
 
