@@ -116,4 +116,4 @@ coverage.xml
 notebooks/.jupyter/
 notebooks/**/Untitled*.ipynb
 notebooks/**/__pycache__/
-notebooks/**/*.pyc
+notebooks/**/*.pycnotebooks/.virtual_documents/

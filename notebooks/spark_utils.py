@@ -22,6 +22,11 @@ def create_spark_session(app_name="JupyterNotebook"):
         .appName(app_name) \
         .master("spark://spark-master:7077") \
         .config("spark.driver.host", "jupyter-spark") \
+        .config("spark.dynamicAllocation.enabled", "false") \
+        .config("spark.cores.max", "1") \
+        .config("spark.executor.cores", "1") \
+        .config("spark.executor.memory", "3g") \
+        .config("spark.driver.bindAddress", "0.0.0.0") \
         .config("spark.driver.port", "4040") \
         .config("spark.hadoop.fs.s3a.endpoint", f"http://{minio_endpoint}") \
         .config("spark.hadoop.fs.s3a.access.key", minio_access_key) \

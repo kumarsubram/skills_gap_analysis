@@ -450,6 +450,16 @@
   "stanza": { "type": "nlp", "language": "Python", "framework": "Stanford NLP" },
   "flair": { "type": "nlp", "language": "Python", "framework": "Flair" },
   "sentence-transformers": { "type": "nlp", "language": "Python", "framework": "Sentence Transformers" },
+
+  "uniswap": { "type": "blockchain", "language": "Solidity", "framework": "Uniswap" },
+  "aave": { "type": "blockchain", "language": "Solidity", "framework": "Aave" },
+  "compound": { "type": "blockchain", "language": "Solidity", "framework": "Compound" },
+  "makerdao": { "type": "blockchain", "language": "Solidity", "framework": "MakerDAO" },
+  "curve": { "type": "blockchain", "language": "Solidity", "framework": "Curve" },
+  "yearn": { "type": "blockchain", "language": "Solidity", "framework": "Yearn" },
+  "sushiswap": { "type": "blockchain", "language": "Solidity", "framework": "SushiSwap" },
+  "pancakeswap": { "type": "blockchain", "language": "Solidity", "framework": "PancakeSwap" },
+  "1inch": { "type": "blockchain", "language": "Solidity", "framework": "1inch" },
   
   "apache spark": { "type": "big_data", "language": "Scala", "framework": "Apache Spark" },
   "spark": { "type": "big_data", "language": "Scala", "framework": "Apache Spark" },

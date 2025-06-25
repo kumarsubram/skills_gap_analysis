@@ -403,8 +403,8 @@ services:
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     environment:
       - SPARK_MASTER=spark://spark-master:7077
-      - SPARK_WORKER_CORES=${SPARK_WORKER_CORES:-2}
-      - SPARK_WORKER_MEMORY=${SPARK_WORKER_MEMORY:-6G}
+      - SPARK_WORKER_CORES=${SPARK_WORKER_CORES:-1}
+      - SPARK_WORKER_MEMORY=${SPARK_WORKER_MEMORY:-3G}
       - SPARK_WORKER_PORT=8881
       - SPARK_WORKER_WEBUI_PORT=8081
       - SPARK_WORKER_CLEANUP_ENABLED=true
@@ -425,9 +425,52 @@ services:
     deploy:
       resources:
         limits:
-          memory: 7G
+          memory: 4G
         reservations:
-          memory: 6G
+          memory: 3G
+    volumes:
+      - spark-logs:/opt/spark/logs
+      - spark-events:/opt/spark/work
+      - ${AIRFLOW_PROJ_DIR:-.}/data:/opt/spark/data
+      - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/spark/config
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    restart: always
+
+  spark-worker-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    container_name: spark-worker-2
+    hostname: spark-worker-2
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    environment:
+      - SPARK_MASTER=spark://spark-master:7077
+      - SPARK_WORKER_CORES=${SPARK_WORKER_CORES:-1}
+      - SPARK_WORKER_MEMORY=${SPARK_WORKER_MEMORY:-3G}
+      - SPARK_WORKER_PORT=8882
+      - SPARK_WORKER_WEBUI_PORT=8082 
+      - SPARK_WORKER_CLEANUP_ENABLED=true
+      - SPARK_WORKER_CLEANUP_INTERVAL=1800    
+      - SPARK_WORKER_CLEANUP_APPDATA_TTL=3600 
+      - SPARK_CONF_DIR=/opt/spark/conf
+      - PYSPARK_PYTHON=python3.12
+      - PYSPARK_DRIVER_PYTHON=python3.12
+      - SPARK_OPTS=--conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog
+      - SPARK_WORKER_DIR=/opt/spark/work
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT}
+      - MINIO_BUCKET=${MINIO_BUCKET}
+    ports:
+      - "8062:8082"
+    deploy:
+      resources:
+        limits:
+          memory: 4G 
+        reservations:
+          memory: 3G
     volumes:
       - spark-logs:/opt/spark/logs
       - spark-events:/opt/spark/work
