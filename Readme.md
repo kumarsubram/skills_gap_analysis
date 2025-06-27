@@ -174,7 +174,7 @@ docker compose logs spark-master | grep -i delta
 **Kafka connectivity:**
 ```bash
 # Test Kafka from inside network
-docker compose exec kafka kafka-topics --list --bootstrap-server localhost:9092
+docker compose exec kafka kafka-topics --list --bootstrap-server kafka:29092
 ```
 
 ### Health Checks

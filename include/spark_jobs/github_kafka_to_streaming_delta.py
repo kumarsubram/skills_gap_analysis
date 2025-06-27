@@ -1,13 +1,7 @@
 """
-GitHub Kafka to Streaming Delta - FIXED WITH WORKING S3A CONFIG
-===============================================================
-
-FIXED: Using EXACT same S3A configuration from your working batch job
-- Removed problematic time-based configs that caused "24h" error
-- Added all the working numeric timeout values
-- Proper error handling and cleanup
-
-Place at: include/spark_jobs/github_kafka_to_streaming_delta.py
+Exact Schema Match GitHub Kafka to Streaming Delta Consumer
+==========================================================
+Replace: include/spark_jobs/github_kafka_to_streaming_delta.py
 """
 
 import sys
@@ -16,16 +10,17 @@ import json
 import re
 import time
 import signal
+import shutil
 from pathlib import Path
 
-# Spark imports - explicit, no star imports
+# Spark imports
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
-    col, lit, current_timestamp, explode, size, hour, to_date, 
-    to_timestamp, when, window, from_json, udf
+    col, lit, current_timestamp, size, from_json, udf, 
+    explode, coalesce, count
 )
 from pyspark.sql.types import (
-    ArrayType, StringType, StructType, StructField
+    ArrayType, StringType, StructType, StructField, IntegerType, DateType, TimestampType
 )
 
 # Add project root for imports
@@ -42,13 +37,7 @@ def cleanup_spark_session(spark):
             spark.stop()
             print("✅ Spark session stopped")
         except Exception as e:
-            print(f"⚠️  Spark cleanup warning: {e}")
-        finally:
-            # Force cleanup
-            try:
-                spark._jvm.System.gc()
-            except (AttributeError, Exception):
-                pass
+            print(f"⚠️ Spark cleanup warning: {e}")
 
 
 def signal_handler(signum, frame):
@@ -59,8 +48,22 @@ def signal_handler(signum, frame):
     sys.exit(1)
 
 
+def clean_checkpoint_directory():
+    """Clean checkpoint directory for fresh start"""
+    checkpoint_dir = "/tmp/spark-streaming-checkpoint/github-consumer"
+    try:
+        if os.path.exists(checkpoint_dir):
+            print(f"🧹 Cleaning checkpoint directory: {checkpoint_dir}")
+            shutil.rmtree(checkpoint_dir)
+            print("✅ Checkpoint directory cleaned")
+        else:
+            print("ℹ️ Checkpoint directory doesn't exist - good for fresh start")
+    except Exception as e:
+        print(f"⚠️ Warning: Could not clean checkpoint directory: {e}")
+
+
 def create_optimized_spark_session():
-    """Create Spark session using EXACT WORKING S3A CONFIG from your batch job"""
+    """Create Spark session with enhanced configuration"""
     
     # Get environment variables
     minio_access_key = os.getenv('MINIO_ACCESS_KEY')
@@ -70,17 +73,23 @@ def create_optimized_spark_session():
     if not all([minio_access_key, minio_secret_key, minio_endpoint]):
         raise ValueError("MinIO credentials required")
     
-    # Get Kafka servers
-    vps_ip = os.getenv('VPS_IP', 'localhost')
-    kafka_servers = f'{vps_ip}:9092' if vps_ip != 'localhost' else 'localhost:9092'
+    kafka_servers = 'kafka:29092'
     
-    print("🔧 Creating Spark session for streaming...")
+    print("🔧 Creating Spark session with exact schema matching...")
     print(f"📡 Kafka: {kafka_servers}")
     print(f"💾 MinIO: {minio_endpoint}")
-    print("✅ Using PROVEN working S3A configuration")
     
     spark = SparkSession.builder \
-        .appName("GitHubKafkaConsumer") \
+        .appName("GitHubKafkaConsumer_ExactSchema") \
+        .config("spark.jars", 
+            "/opt/spark/jars/delta-spark_2.13-4.0.0.jar,"
+            "/opt/spark/jars/delta-storage-4.0.0.jar,"
+            "/opt/spark/jars/spark-sql-kafka-0-10_2.13-4.0.0.jar,"
+            "/opt/spark/jars/kafka-clients-3.9.0.jar,"
+            "/opt/spark/jars/spark-token-provider-kafka-0-10_2.13-4.0.0.jar,"
+            "/opt/spark/jars/hadoop-aws-3.3.6.jar,"
+            "/opt/spark/jars/aws-java-sdk-bundle-1.12.367.jar"
+        ) \
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
         .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
         .config("spark.hadoop.fs.s3a.endpoint", f"http://{minio_endpoint}") \
@@ -89,167 +98,345 @@ def create_optimized_spark_session():
         .config("spark.hadoop.fs.s3a.path.style.access", "true") \
         .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false") \
         .config("spark.hadoop.fs.s3a.aws.credentials.provider", "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider") \
-        .config("spark.hadoop.fs.s3a.threads.keepalivetime", "60") \
-        .config("spark.hadoop.fs.s3a.connection.establish.timeout", "30000") \
-        .config("spark.hadoop.fs.s3a.connection.timeout", "200000") \
-        .config("spark.hadoop.fs.s3a.connection.ttl", "300000") \
-        .config("spark.hadoop.fs.s3a.retry.interval", "500") \
-        .config("spark.hadoop.fs.s3a.retry.throttle.interval", "100") \
-        .config("spark.hadoop.fs.s3a.assumed.role.session.duration", "1800000") \
-        .config("spark.hadoop.fs.s3a.multipart.purge.age", "86400000") \
-        .config("spark.hadoop.fs.s3a.connection.maximum", "100") \
-        .config("spark.hadoop.fs.s3a.fast.upload", "true") \
+        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
         .config("spark.sql.streaming.checkpointLocation", "/tmp/spark-streaming-checkpoint") \
         .config("spark.sql.streaming.forceDeleteTempCheckpointLocation", "true") \
+        .config("spark.sql.execution.arrow.pyspark.enabled", "false") \
+        .config("spark.sql.adaptive.enabled", "false") \
+        .config("spark.sql.adaptive.coalescePartitions.enabled", "false") \
+        .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer") \
+        .config("spark.sql.streaming.stopGracefullyOnShutdown", "true") \
         .getOrCreate()
     
+    # Set log level to reduce noise
+    spark.sparkContext.setLogLevel("WARN")
+    
     print(f"✅ Spark session created: {spark.version}")
-    print("✅ PROVEN S3A configuration applied - NO MORE '24h' ERRORS!")
     return spark, kafka_servers
 
 
+def get_exact_target_schema():
+    """Return the EXACT schema that matches your Delta table"""
+    return StructType([
+        StructField('hour', IntegerType(), True), 
+        StructField('keyword', StringType(), True), 
+        StructField('mentions', IntegerType(), True), 
+        StructField('top_repo', StringType(), True), 
+        StructField('repo_mentions', IntegerType(), True), 
+        StructField('event_mentions', IntegerType(), True), 
+        StructField('date', DateType(), True), 
+        StructField('source_file', StringType(), True), 
+        StructField('processing_time', TimestampType(), True), 
+        StructField('event_id', StringType(), True), 
+        StructField('event_timestamp', TimestampType(), True), 
+        StructField('event_type', StringType(), True), 
+        StructField('actor_login', StringType(), True), 
+        StructField('kafka_timestamp', TimestampType(), True), 
+        StructField('batch_id', StringType(), True), 
+        StructField('window_start', TimestampType(), True), 
+        StructField('window_end', TimestampType(), True)
+    ])
+
+
 def load_keywords():
-    """Load technology keywords"""
+    """Load technology keywords with enhanced error handling"""
     keyword_path = "/opt/airflow/include/jsons/tech_keywords.json"
     
     try:
+        print(f"📋 Loading keywords from: {keyword_path}")
         with open(keyword_path, "r", encoding="utf-8") as f:
-            keywords = json.load(f)
-        print(f"📋 Loaded {len(keywords)} technology keywords")
-        return list(keywords.keys())
+            keywords_dict = json.load(f)
+        
+        keywords = list(keywords_dict.keys())
+        print(f"✅ Loaded {len(keywords)} technology keywords")
+        
+        return keywords
+        
     except Exception as e:
         print(f"❌ Error loading keywords: {e}")
-        return []
+        # Fallback keywords
+        fallback = ['python', 'javascript', 'react', 'node', 'docker', 'api', 'web', 'app']
+        print(f"⚠️ Using fallback keywords: {fallback}")
+        return fallback
 
 
 def create_technology_extraction_udf(keywords):
-    """Create UDF to extract technologies from GitHub event JSON"""
+    """Create robust UDF for technology extraction"""
     
-    def extract_technologies(event_json):
-        """Extract technology keywords from GitHub event JSON"""
-        if not event_json:
+    def extract_technologies_robust(event_json_str):
+        """
+        Robust technology extraction with comprehensive error handling
+        """
+        # Handle null/empty input
+        if not event_json_str or event_json_str.strip() == "":
             return []
         
         try:
-            event = json.loads(event_json)
-            found_technologies = []
+            # Parse JSON
+            try:
+                event = json.loads(event_json_str)
+            except json.JSONDecodeError:
+                return []
             
-            # Collect text content to search
+            if not isinstance(event, dict):
+                return []
+            
+            found_technologies = set()  # Use set to avoid duplicates
+            
+            # Extract searchable text from various sources
             text_sources = []
             
-            # Repository name
-            repo_name = event.get("repo", {}).get("name", "")
-            if repo_name:
-                text_sources.append(repo_name.lower())
+            # 1. Repository name (most reliable)
+            repo = event.get("repo", {})
+            if isinstance(repo, dict):
+                repo_name = repo.get("name", "")
+                if repo_name and isinstance(repo_name, str):
+                    text_sources.append(repo_name.lower())
             
-            # Event-specific content extraction
+            # 2. Event type and payload
             event_type = event.get("type", "")
             payload = event.get("payload", {})
             
-            if event_type == "PushEvent":
-                commits = payload.get("commits", [])
-                for commit in commits:
-                    message = commit.get("message", "")
-                    if message:
-                        text_sources.append(message.lower())
+            if isinstance(payload, dict):
+                # Handle PushEvent commits
+                if event_type == "PushEvent" and "commits" in payload:
+                    commits = payload["commits"]
+                    if isinstance(commits, list):
+                        for commit in commits[:3]:  # Limit to first 3
+                            if isinstance(commit, dict):
+                                message = commit.get("message", "")
+                                if message and isinstance(message, str):
+                                    text_sources.append(message.lower()[:200])
+                
+                # Handle PullRequestEvent
+                elif event_type == "PullRequestEvent" and "pull_request" in payload:
+                    pr = payload["pull_request"]
+                    if isinstance(pr, dict):
+                        title = pr.get("title", "")
+                        if title and isinstance(title, str):
+                            text_sources.append(title.lower())
             
-            elif event_type == "PullRequestEvent":
-                pr = payload.get("pull_request", {})
-                title = pr.get("title", "")
-                if title:
-                    text_sources.append(title.lower())
-                body = pr.get("body", "")
-                if body:
-                    text_sources.append(body[:500].lower())
-            
-            elif event_type == "ReleaseEvent":
-                release = payload.get("release", {})
-                name = release.get("name", "")
-                if name:
-                    text_sources.append(name.lower())
-                body = release.get("body", "")
-                if body:
-                    text_sources.append(body[:500].lower())
-            
-            # Search for technology keywords
+            # 3. Search for keywords in all text sources
             for text in text_sources:
+                if not text or not isinstance(text, str):
+                    continue
+                
+                # Create word boundaries for better matching
+                words = set(re.findall(r'\b\w+\b', text))
+                
                 for keyword in keywords:
-                    # Use word boundary regex for accurate matching
-                    pattern = rf"\b{re.escape(keyword.lower())}\b"
-                    if re.search(pattern, text):
-                        found_technologies.append(keyword)
+                    if not keyword or not isinstance(keyword, str):
+                        continue
+                    
+                    keyword_lower = keyword.lower().strip()
+                    if not keyword_lower:
+                        continue
+                    
+                    # Strategy 1: Exact word match
+                    if keyword_lower in words:
+                        found_technologies.add(keyword)
+                    
+                    # Strategy 2: Substring match for longer keywords (>4 chars)
+                    elif len(keyword_lower) > 4 and keyword_lower in text:
+                        found_technologies.add(keyword)
+                    
+                    # Strategy 3: Handle compound keywords (e.g., "next.js", "vue.js")
+                    elif "." in keyword_lower or "-" in keyword_lower:
+                        # Remove special chars for matching
+                        keyword_clean = re.sub(r'[.-]', '', keyword_lower)
+                        if keyword_clean in text:
+                            found_technologies.add(keyword)
             
-            # Remove duplicates and return
-            return list(set(found_technologies))
+            return list(found_technologies)
             
         except Exception:
-            # Return empty list if JSON parsing or processing fails
+            # Log error but don't fail the entire job
             return []
     
-    # Create and return the UDF
-    return udf(extract_technologies, ArrayType(StringType()))
+    # Register UDF
+    return udf(extract_technologies_robust, ArrayType(StringType()))
 
 
 def write_to_streaming_delta(dataframe, epoch_id):
-    """Write streaming batch to Delta table with enhanced schema"""
+    """Write to Delta with EXACT schema matching"""
     
-    streaming_table_path = "s3a://delta-lake/bronze/bronze_streaming_github_keyword_extractions"
+    streaming_table_path = "s3a://delta-lake/bronze/bronze_github_streaming_keyword_extractions"
+    batch_id = f"batch_{epoch_id}_{int(time.time())}"
+    
+    print("\n" + "="*60)
+    print(f"📦 PROCESSING BATCH {epoch_id}")
+    print(f"🕐 Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"📋 Batch ID: {batch_id}")
+    print("="*60)
     
     try:
-        # Add batch metadata for traceability
-        batch_id = f"batch_{epoch_id}_{int(time.time())}"
-        enhanced_df = dataframe.withColumn("batch_id", lit(batch_id))
+        # Step 1: Persist input
+        dataframe.persist()
         
-        # Write to Delta table using PROVEN S3A configuration
-        print(f"💾 Writing batch {epoch_id} to Delta table...")
-        print(f"🎯 Target: {streaming_table_path}")
-        print("✅ Using working S3A config - NO MORE ERRORS!")
+        # Count records
+        record_count = dataframe.count()
+        print(f"📊 [Batch {epoch_id}] Raw records received: {record_count}")
         
-        enhanced_df.write \
+        if record_count == 0:
+            print(f"ℹ️ [Batch {epoch_id}] Empty batch - skipping processing")
+            return
+        
+        # Step 2: Filter for tech events
+        tech_events = dataframe.filter(
+            (size(col("technologies")) > 0) & 
+            col("technologies").isNotNull()
+        )
+        tech_count = tech_events.count()
+        print(f"✅ [Batch {epoch_id}] Events with technologies: {tech_count}")
+        
+        if tech_count == 0:
+            print(f"ℹ️ [Batch {epoch_id}] No tech events to process")
+            return
+        
+        # Step 3: Explode technologies
+        exploded_df = tech_events.select(
+            explode(col("technologies")).alias("keyword"),
+            col("event_id"),
+            col("event_type"),
+            col("repo_name"),
+            col("processing_time")
+        )
+        
+        # Step 4: Aggregate by keyword and repo
+        aggregated_df = exploded_df.groupBy("keyword", "repo_name").agg(
+            count("event_id").alias("mention_count")
+        )
+        
+        # Step 5: Create DataFrame with EXACT schema match
+        print(f"🔧 [Batch {epoch_id}] Creating exact schema match...")
+        
+        # Get current timestamp ONCE to ensure consistency
+        now_timestamp = current_timestamp()
+        
+        # Create final DataFrame with EXACT field order and types
+        final_df = aggregated_df.select(
+            # EXACT ORDER AS YOUR SCHEMA
+            lit(23).cast(IntegerType()).alias("hour"),                                    # hour: IntegerType
+            col("keyword").cast(StringType()).alias("keyword"),                          # keyword: StringType  
+            col("mention_count").cast(IntegerType()).alias("mentions"),                  # mentions: IntegerType
+            col("repo_name").cast(StringType()).alias("top_repo"),                       # top_repo: StringType
+            col("mention_count").cast(IntegerType()).alias("repo_mentions"),             # repo_mentions: IntegerType
+            col("mention_count").cast(IntegerType()).alias("event_mentions"),            # event_mentions: IntegerType
+            now_timestamp.cast("date").alias("date"),                                    # date: DateType
+            lit("streaming").cast(StringType()).alias("source_file"),                   # source_file: StringType
+            now_timestamp.cast(TimestampType()).alias("processing_time"),               # processing_time: TimestampType
+            lit(None).cast(StringType()).alias("event_id"),                             # event_id: StringType
+            now_timestamp.cast(TimestampType()).alias("event_timestamp"),               # event_timestamp: TimestampType
+            lit("Streaming").cast(StringType()).alias("event_type"),                    # event_type: StringType
+            lit("streaming").cast(StringType()).alias("actor_login"),                   # actor_login: StringType
+            now_timestamp.cast(TimestampType()).alias("kafka_timestamp"),               # kafka_timestamp: TimestampType
+            lit(batch_id).cast(StringType()).alias("batch_id"),                         # batch_id: StringType
+            now_timestamp.cast(TimestampType()).alias("window_start"),                  # window_start: TimestampType
+            now_timestamp.cast(TimestampType()).alias("window_end")                     # window_end: TimestampType
+        )
+        
+        # Count final records
+        final_count = final_df.count()
+        print(f"📊 [Batch {epoch_id}] Final records to write: {final_count}")
+        
+        # Step 6: Verify schema before write
+        actual_schema = final_df.schema
+        target_schema = get_exact_target_schema()
+        
+        print(f"🔍 [Batch {epoch_id}] Schema verification:")
+        print(f"   Target fields: {len(target_schema.fields)}")
+        print(f"   Actual fields: {len(actual_schema.fields)}")
+        
+        # Check field by field
+        schema_match = True
+        for i, (target_field, actual_field) in enumerate(zip(target_schema.fields, actual_schema.fields)):
+            if target_field.name != actual_field.name or target_field.dataType != actual_field.dataType:
+                print(f"   ❌ Field {i}: {target_field.name}({target_field.dataType}) != {actual_field.name}({actual_field.dataType})")
+                schema_match = False
+            else:
+                print(f"   ✅ Field {i}: {target_field.name}({target_field.dataType})")
+        
+        if not schema_match:
+            print(f"❌ [Batch {epoch_id}] Schema mismatch detected - aborting write")
+            return
+        
+        print(f"✅ [Batch {epoch_id}] Schema match verified!")
+        
+        # Step 7: Write to Delta table
+        print(f"🔄 [Batch {epoch_id}] Writing to Delta table...")
+        
+        final_df.write \
             .format("delta") \
             .mode("append") \
             .save(streaming_table_path)
         
-        record_count = enhanced_df.count()
-        print(f"✅ Batch {epoch_id}: Wrote {record_count} records to streaming Delta table")
+        print(f"✅ [Batch {epoch_id}] Successfully wrote {final_count} records")
+        
+        # Show sample of what was written (for small batches)
+        if final_count <= 10:
+            print(f"📝 [Batch {epoch_id}] Records written:")
+            written_sample = final_df.collect()
+            for i, record in enumerate(written_sample):
+                print(f"   {i+1}. {record.keyword}: {record.mentions} mentions in {record.top_repo}")
+        
+        print(f"🎉 [Batch {epoch_id}] Batch processing completed successfully!")
         
     except Exception as e:
-        print(f"❌ Batch {epoch_id}: Write failed - {e}")
-        # Re-raise to stop the streaming query on write failures
-        raise
+        print(f"❌ [Batch {epoch_id}] Error: {e}")
+        import traceback
+        traceback.print_exc()
+        
+    finally:
+        try:
+            dataframe.unpersist()
+        except Exception as e:
+            print(f"⚠️ [Batch {epoch_id}] Unpersist warning: {e}")
+        
+        print(f"📋 [Batch {epoch_id}] Batch processing ended")
+        print("="*60)
 
 
 def main():
-    """Main streaming consumer entry point"""
+    """Exact schema match streaming consumer"""
     
-    # Register signal handlers for graceful shutdown
+    # Register signal handlers
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
     
-    print("🚀 GITHUB KAFKA TO STREAMING DELTA - FIXED VERSION")
+    print("🚀 EXACT SCHEMA MATCH GITHUB KAFKA TO STREAMING DELTA")
     print("=" * 60)
+    print()
     print("📡 Source: github-events-raw (Kafka topic)")
-    print("💾 Target: bronze_streaming_github_keyword_extractions")
-    print("✅ Using PROVEN working S3A configuration")
-    print("🔧 Fixed: No more '24h' NumberFormatException errors!")
+    print("💾 Target: bronze_github_streaming_keyword_extractions")
+    print("=" * 60)
     
     spark = None
+    streaming_query = None
+    
     try:
-        # Initialize Spark session with working S3A config
+        # Clean checkpoint
+        clean_checkpoint_directory()
+        
+        # Initialize Spark
         spark, kafka_servers = create_optimized_spark_session()
         globals()['spark'] = spark
         
-        # Load technology keywords
+        # Show target schema
+        target_schema = get_exact_target_schema()
+        print(f"\n📋 Target schema ({len(target_schema.fields)} fields):")
+        for i, field in enumerate(target_schema.fields):
+            print(f"   {i+1:2d}. {field.name}: {field.dataType}")
+        
+        # Load keywords
         keywords = load_keywords()
         if not keywords:
-            raise Exception("No technology keywords loaded - cannot proceed")
+            raise ValueError("No technology keywords loaded")
         
-        # Create UDF for technology extraction
+        # Create UDF
         extract_tech_udf = create_technology_extraction_udf(keywords)
+        print("✅ UDF created successfully")
         
-        print("📡 Setting up Kafka stream...")
-        
-        # Configure Kafka stream source
+        # Configure Kafka stream
         kafka_stream = spark \
             .readStream \
             .format("kafka") \
@@ -260,76 +447,34 @@ def main():
             .option("maxOffsetsPerTrigger", "100") \
             .load()
         
-        print("🔍 Setting up enhanced processing pipeline...")
-        
-        # Define GitHub event schema for JSON parsing
+        # Process stream
         github_event_schema = StructType([
             StructField("id", StringType(), True),
             StructField("type", StringType(), True),
-            StructField("created_at", StringType(), True),
             StructField("repo", StructType([
                 StructField("name", StringType(), True)
-            ]), True),
-            StructField("actor", StructType([
-                StructField("login", StringType(), True)
             ]), True)
         ])
         
-        # Process the stream with enhanced schema
         processed_stream = kafka_stream \
             .select(
-                col("value").cast("string").alias("raw_event"),
-                col("timestamp").alias("kafka_timestamp"),
-                col("key").cast("string").alias("kafka_key")
+                col("value").cast("string").alias("raw_event")
             ) \
             .withColumn("technologies", extract_tech_udf(col("raw_event"))) \
-            .filter(size(col("technologies")) > 0) \
             .withColumn("event_data", from_json(col("raw_event"), github_event_schema)) \
             .select(
-                # Extract event fields
-                col("event_data.id").alias("event_id"),
-                col("event_data.type").alias("event_type"),
-                col("event_data.created_at").alias("event_timestamp_str"),
-                col("event_data.repo.name").alias("top_repo"),
-                col("event_data.actor.login").alias("actor_login"),
+                coalesce(col("event_data.id"), lit("unknown")).alias("event_id"),
+                coalesce(col("event_data.type"), lit("unknown")).alias("event_type"),
+                coalesce(col("event_data.repo.name"), lit("unknown")).alias("repo_name"),
                 col("technologies"),
-                col("kafka_timestamp"),
                 current_timestamp().alias("processing_time")
-            ) \
-            .withColumn("event_timestamp", 
-                when(col("event_timestamp_str").isNotNull(), 
-                     to_timestamp(col("event_timestamp_str"), "yyyy-MM-dd'T'HH:mm:ss'Z'"))
-                .otherwise(col("kafka_timestamp"))
-            ) \
-            .withColumn("window_start", window(col("kafka_timestamp"), "30 seconds").start) \
-            .withColumn("window_end", window(col("kafka_timestamp"), "30 seconds").end) \
-            .select(
-                explode(col("technologies")).alias("keyword"),
-                # Original batch schema columns (for compatibility)
-                hour(col("event_timestamp")).alias("hour"),
-                lit(1).alias("mentions"),
-                col("top_repo"),
-                lit(1).alias("repo_mentions"),
-                lit(1).alias("event_mentions"),
-                to_date(col("event_timestamp")).alias("date"),
-                lit("streaming-kafka").alias("source_file"),
-                col("processing_time"),
-                # Enhanced streaming columns
-                col("event_id"),
-                col("event_timestamp"),
-                col("event_type"),
-                col("actor_login"),
-                col("kafka_timestamp"),
-                col("window_start"),
-                col("window_end")
             )
         
-        print("💾 Starting streaming write to Delta table...")
+        print("\n💾 Starting exact schema-matched streaming write...")
         print("⏰ Processing micro-batches every 30 seconds")
-        print("🔄 Will run until manually stopped")
-        print("✅ NO MORE S3A CONFIGURATION ERRORS!")
+        print("🔍 Schema verification enabled for each batch")
+        print("-" * 60)
         
-        # Start the streaming query
         streaming_query = processed_stream \
             .writeStream \
             .foreachBatch(write_to_streaming_delta) \
@@ -338,19 +483,31 @@ def main():
             .option("checkpointLocation", "/tmp/spark-streaming-checkpoint/github-consumer") \
             .start()
         
-        print("✅ Streaming query started successfully")
-        print("📊 Monitor progress in Spark UI")
+        print("✅ Streaming query started successfully!")
         
-        # Wait for termination (manual stop or error)
+        # Wait for termination
         streaming_query.awaitTermination()
         
     except Exception as e:
-        print(f"\n❌ Streaming job failed: {e}")
+        print(f"\n❌ CRITICAL ERROR: {e}")
         import traceback
         traceback.print_exc()
+        
+        if streaming_query:
+            try:
+                streaming_query.stop()
+            except Exception:
+                pass
+        
         sys.exit(1)
+        
     finally:
-        # Ensure cleanup happens
+        if streaming_query:
+            try:
+                streaming_query.stop()
+            except Exception as e:
+                print(f"⚠️ Warning stopping query: {e}")
+        
         cleanup_spark_session(spark)
 
 

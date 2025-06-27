@@ -71,7 +71,7 @@ def get_streaming_table_schema() -> pa.Schema:
 
 def get_streaming_table_path() -> str:
     """Get the streaming table path - FOLLOWS YOUR ENTERPRISE NAMING"""
-    return "s3://delta-lake/bronze/bronze_streaming_github_keyword_extractions"
+    return "s3://delta-lake/bronze/bronze_github_streaming_keyword_extractions"
 
 
 def check_streaming_table_exists() -> bool:

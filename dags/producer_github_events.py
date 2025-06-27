@@ -1,32 +1,173 @@
 """
-GitHub Events Producer DAG
-==========================
+GitHub Events Producer DAG - FIXED WITH KEYWORD FILTERING
+=========================================================
 
-Streams GitHub events to Kafka every 3 seconds for 1 hour.
-Place at: dags/producer_github_events.py
+✅ SAME DAG NAME: producer_github_events (no changes to DAG ID)
+✅ ENHANCED: Now filters for technology keywords before sending to Kafka
+✅ FIXED: Proper error handling and statistics
+
+Replace: dags/producer_github_events.py
 """
 
 import os
 import json
 import time
 import requests
+import re
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
+
+def load_tech_keywords():
+    """Load technology keywords from your existing file"""
+    keyword_path = "/opt/airflow/include/jsons/tech_keywords.json" 
+    
+    try:
+        with open(keyword_path, "r", encoding="utf-8") as f:
+            keywords_data = json.load(f)
+        
+        # Extract just the keys (keyword names) from your structured format
+        if isinstance(keywords_data, dict):
+            keywords = set(keywords_data.keys())
+        else:
+            keywords = set(keywords_data)
+        
+        # Convert to lowercase for case-insensitive matching
+        keywords_lower = {kw.lower() for kw in keywords}
+        
+        print(f"📋 Loaded {len(keywords)} technology keywords")
+        print(f"🔍 Sample keywords: {list(keywords)[:10]}")
+        
+        return keywords, keywords_lower
+        
+    except Exception as e:
+        print(f"❌ Error loading keywords: {e}")
+        # Fallback to basic keywords for testing
+        basic_keywords = {
+            'python', 'javascript', 'react', 'node', 'docker', 'api', 'web', 'app', 
+            'js', 'py', 'css', 'html', 'sql', 'git', 'npm', 'pip', 'cli', 'bot',
+            'server', 'client', 'lib', 'sdk', 'tool', 'framework', 'library'
+        }
+        print(f"⚠️ Using fallback keywords: {len(basic_keywords)} basic terms")
+        return basic_keywords, basic_keywords
+
+
+def extract_searchable_text(event):
+    """Extract all searchable text from GitHub event"""
+    text_parts = []
+    
+    # Repository name (MOST IMPORTANT for tech keywords)
+    if 'repo' in event:
+        repo_name = event['repo'].get('name', '')
+        if repo_name:
+            text_parts.append(repo_name.lower())
+            # Extract just repo name without owner
+            if '/' in repo_name:
+                text_parts.append(repo_name.split('/')[-1].lower())
+    
+    # Event type
+    text_parts.append(event.get('type', '').lower())
+    
+    # Actor (sometimes contains tech terms)
+    if 'actor' in event:
+        text_parts.append(event['actor'].get('login', '').lower())
+    
+    # Payload content based on event type
+    payload = event.get('payload', {})
+    event_type = event.get('type', '')
+    
+    if event_type == 'PushEvent':
+        # Commit messages
+        commits = payload.get('commits', [])
+        for commit in commits[:3]:  # Limit to first 3 commits
+            message = commit.get('message', '')
+            if message:
+                text_parts.append(message.lower()[:200])  # First 200 chars
+    
+    elif event_type == 'PullRequestEvent':
+        pr = payload.get('pull_request', {})
+        title = pr.get('title', '')
+        if title:
+            text_parts.append(title.lower())
+        
+        # Branch names often contain tech terms
+        if 'head' in pr and pr['head']:
+            branch = pr['head'].get('ref', '')
+            if branch:
+                text_parts.append(branch.lower())
+    
+    elif event_type == 'CreateEvent':
+        # New repo/branch descriptions
+        description = payload.get('description', '')
+        if description:
+            text_parts.append(description.lower()[:200])
+        
+        ref = payload.get('ref', '')
+        if ref:
+            text_parts.append(ref.lower())
+    
+    elif event_type == 'ReleaseEvent':
+        release = payload.get('release', {})
+        name = release.get('name', '')
+        if name:
+            text_parts.append(name.lower())
+        
+        tag = release.get('tag_name', '')
+        if tag:
+            text_parts.append(tag.lower())
+    
+    elif event_type == 'IssuesEvent':
+        issue = payload.get('issue', {})
+        title = issue.get('title', '')
+        if title:
+            text_parts.append(title.lower()[:100])
+    
+    # Join all text
+    full_text = ' '.join(filter(None, text_parts))
+    return full_text
+
+
+def find_keywords_in_event(event, keywords, keywords_lower):
+    """Find technology keywords in a GitHub event"""
+    searchable_text = extract_searchable_text(event)
+    
+    if not searchable_text:
+        return []
+    
+    found_keywords = []
+    
+    # Extract words from text
+    words = re.findall(r'\b\w+\b', searchable_text)
+    word_set = set(words)
+    
+    # Check for exact word matches
+    for keyword_lower in keywords_lower:
+        if keyword_lower in word_set:
+            # Find original keyword case
+            original_keyword = next(k for k in keywords if k.lower() == keyword_lower)
+            found_keywords.append(original_keyword)
+    
+    # Also check for substring matches (for compound terms)
+    for keyword_lower in keywords_lower:
+        if len(keyword_lower) > 3 and keyword_lower in searchable_text:
+            original_keyword = next(k for k in keywords if k.lower() == keyword_lower)
+            if original_keyword not in found_keywords:
+                found_keywords.append(original_keyword)
+    
+    return list(set(found_keywords))  # Remove duplicates
+
+
 def get_kafka_bootstrap_servers():
-    """Environment detection (same as your test DAG)"""
-    vps_ip = os.getenv('VPS_IP', 'localhost')
-    if vps_ip and vps_ip != 'localhost':
-        return f'{vps_ip}:9092'
-    else:
-        return 'localhost:9092'
+    """Kafka is always localhost for container-to-container communication"""
+    return 'kafka:29092'
+
 
 def produce_github_events(**context):
-    """Produce GitHub events to Kafka"""
+    """ENHANCED: Produce GitHub events to Kafka with keyword filtering"""
     
-    print("🚀 GITHUB EVENTS PRODUCER")
-    print("=" * 50)
+    print("🚀 ENHANCED GITHUB EVENTS PRODUCER WITH FILTERING")
+    print("=" * 60)
     
     # Import Kafka producer
     try:
@@ -35,17 +176,21 @@ def produce_github_events(**context):
         print("❌ confluent-kafka not installed")
         return {'status': 'failed', 'error': 'confluent-kafka missing'}
     
+    # Load technology keywords
+    keywords, keywords_lower = load_tech_keywords()
+    
     # Setup
     bootstrap_servers = get_kafka_bootstrap_servers()
     topic = 'github-events-raw'
     
     print(f"🔗 Kafka: {bootstrap_servers}")
     print(f"📤 Topic: {topic}")
+    print(f"🔍 Filtering for {len(keywords)} technology keywords")
     
     # Create Kafka producer
     producer = Producer({
         'bootstrap.servers': bootstrap_servers,
-        'client.id': 'github-events-producer',
+        'client.id': 'github-events-producer-enhanced',
         'acks': 'all',
         'retries': 3
     })
@@ -53,7 +198,7 @@ def produce_github_events(**context):
     # GitHub API setup
     headers = {
         'Accept': 'application/vnd.github.v3+json',
-        'User-Agent': 'JobOrbit-Producer/1.0'
+        'User-Agent': 'JobOrbit-Producer/2.0'
     }
     
     # Add GitHub token if available
@@ -64,43 +209,93 @@ def produce_github_events(**context):
     else:
         print("⚠️ No GitHub token - limited to 60 requests/hour")
     
-    # Stream for 10 minutes (testing)
+    # Enhanced statistics tracking
+    stats = {
+        'total_events_fetched': 0,
+        'events_with_keywords': 0,
+        'events_sent_to_kafka': 0,
+        'keyword_matches': {},
+        'cycles': 0,
+        'api_calls': 0
+    }
+    
+    # Stream for 1 hour 
     start_time = datetime.now()
     end_time = start_time + timedelta(hours=1)
     
-    total_events = 0
-    cycles = 0
-    
     print(f"⏰ Producing until: {end_time.strftime('%H:%M:%S')}")
+    print("🎯 ONLY sending events that contain technology keywords!")
     
     try:
         while datetime.now() < end_time:
-            cycles += 1
+            stats['cycles'] += 1
             
             # Fetch GitHub events
             url = 'https://api.github.com/events'
             
             try:
                 response = requests.get(url, headers=headers, timeout=15)
+                stats['api_calls'] += 1
                 
                 if response.status_code == 200:
                     events = response.json()
+                    stats['total_events_fetched'] += len(events)
                     
-                    # Send each event to Kafka
+                    events_sent_this_cycle = 0
+                    
+                    # Process each event for keywords
                     for event in events:
-                        producer.produce(topic, json.dumps(event))
-                        total_events += 1
+                        # Find keywords in this event
+                        found_keywords = find_keywords_in_event(event, keywords, keywords_lower)
+                        
+                        # Only send to Kafka if keywords found
+                        if found_keywords:
+                            stats['events_with_keywords'] += 1
+                            
+                            # Update keyword statistics
+                            for keyword in found_keywords:
+                                stats['keyword_matches'][keyword] = stats['keyword_matches'].get(keyword, 0) + 1
+                            
+                            # Enhance event with our analysis
+                            enhanced_event = {
+                                **event,
+                                'extracted_keywords': found_keywords,
+                                'searchable_text': extract_searchable_text(event)[:300],
+                                'filter_timestamp': datetime.utcnow().isoformat(),
+                                'producer_version': '2.0_enhanced'
+                            }
+                            
+                            # Send to Kafka
+                            try:
+                                producer.produce(topic, json.dumps(enhanced_event))
+                                events_sent_this_cycle += 1
+                                stats['events_sent_to_kafka'] += 1
+                            except Exception as kafka_error:
+                                print(f"❌ Kafka send error: {kafka_error}")
                     
-                    # Flush messages to ensure delivery
+                    # Flush to ensure delivery
                     producer.flush()
                     
-                    # Log progress
+                    # Enhanced logging
                     remaining = response.headers.get('X-RateLimit-Remaining', 'Unknown')
-                    print(f"📡 Cycle {cycles}: {len(events)} events, Rate limit: {remaining}")
+                    total_filtered = stats['total_events_fetched']
+                    sent_total = stats['events_sent_to_kafka']
+                    filter_rate = (sent_total / total_filtered * 100) if total_filtered > 0 else 0
                     
+                    print(f"📡 Cycle {stats['cycles']}: {len(events)} fetched, "
+                          f"{events_sent_this_cycle} sent | "
+                          f"Total: {sent_total}/{total_filtered} ({filter_rate:.1f}%) | "
+                          f"Rate limit: {remaining}")
+                    
+                    # Show top keywords every 10 cycles
+                    if stats['cycles'] % 10 == 0 and stats['keyword_matches']:
+                        top_keywords = sorted(stats['keyword_matches'].items(), 
+                                            key=lambda x: x[1], reverse=True)[:5]
+                        print(f"   🏆 Top keywords: {dict(top_keywords)}")
+                
                 elif response.status_code == 403:
                     print("❌ Rate limited! Waiting 60 seconds...")
-                    time.sleep(3)
+                    time.sleep(60)
                     continue
                     
                 else:
@@ -109,33 +304,59 @@ def produce_github_events(**context):
             except Exception as e:
                 print(f"❌ Request error: {e}")
             
-            # Wait 30 seconds before next poll
-            print(f"😴 Waiting 3... (Cycle {cycles} complete)")
-            time.sleep(3)
+            # Wait 10 seconds before next poll (faster for more coverage)
+            if datetime.now() < end_time:
+                print(f"😴 Waiting 10 seconds... (Cycle {stats['cycles']} complete)")
+                time.sleep(10)
         
-        print("🏁 1-hour production complete!")
+        print("🏁 Enhanced 1-hour production complete!")
         
+    except KeyboardInterrupt:
+        print("🛑 Producer interrupted")
+    except Exception as e:
+        print(f"❌ Producer error: {e}")
     finally:
         producer.flush()
+        producer.close()
         
         runtime = datetime.now() - start_time
         
-        print("=" * 50)
-        print("📊 PRODUCTION SUMMARY:")
-        print(f"   Total events sent: {total_events}")
-        print(f"   Cycles completed: {cycles}")
-        print(f"   Runtime: {runtime}")
-        print(f"   Topic: {topic}")
-        print("=" * 50)
+        print("=" * 60)
+        print("📊 ENHANCED PRODUCTION SUMMARY:")
+        print(f"   📥 Total events fetched: {stats['total_events_fetched']:,}")
+        print(f"   ✅ Events with keywords: {stats['events_with_keywords']:,}")
+        print(f"   📤 Events sent to Kafka: {stats['events_sent_to_kafka']:,}")
+        print(f"   🎯 Filter success rate: {(stats['events_sent_to_kafka']/stats['total_events_fetched']*100):.1f}%" if stats['total_events_fetched'] > 0 else "   🎯 Filter success rate: 0%")
+        print(f"   🔄 API calls made: {stats['api_calls']}")
+        print(f"   ⏰ Runtime: {runtime}")
+        print(f"   📡 Topic: {topic}")
+        
+        if stats['keyword_matches']:
+            print("   🏆 Top keywords found:")
+            sorted_keywords = sorted(stats['keyword_matches'].items(), 
+                                   key=lambda x: x[1], reverse=True)
+            for keyword, count in sorted_keywords[:10]:
+                print(f"      • {keyword}: {count} events")
+        else:
+            print("   ❌ No technology keywords found in any events")
+            print("   💡 Consider broadening keyword list or checking GitHub API responses")
+        
+        print("=" * 60)
         
         return {
             'status': 'success',
-            'total_events': total_events,
-            'cycles': cycles,
-            'runtime_minutes': runtime.total_seconds() / 60
+            'total_events_fetched': stats['total_events_fetched'],
+            'events_sent_to_kafka': stats['events_sent_to_kafka'],
+            'events_with_keywords': stats['events_with_keywords'],
+            'filter_rate': (stats['events_sent_to_kafka']/stats['total_events_fetched']*100) if stats['total_events_fetched'] > 0 else 0,
+            'runtime_minutes': runtime.total_seconds() / 60,
+            'keyword_matches': dict(sorted(stats['keyword_matches'].items(), 
+                                         key=lambda x: x[1], reverse=True)[:10]),
+            'cycles': stats['cycles']
         }
 
-# DAG definition
+
+# DAG definition - SAME NAME, NO CHANGES
 default_args = {
     'owner': 'data-engineering',
     'start_date': datetime(2025, 6, 23),
@@ -144,13 +365,13 @@ default_args = {
 }
 
 dag = DAG(
-    dag_id='producer_github_events',
+    dag_id='producer_github_events',  # ✅ SAME DAG NAME - NO CHANGES
     default_args=default_args,
-    description='GitHub events producer - streams to Kafka for 10 minutes',
+    description='Enhanced GitHub events producer - filters for technology keywords before sending to Kafka',
     schedule=None,  # Manual trigger only
     catchup=False,
     max_active_runs=1,
-    tags=['github', 'kafka', 'producer', 'streaming'],
+    tags=['github', 'kafka', 'producer', 'streaming', 'enhanced'],
 )
 
 produce_task = PythonOperator(

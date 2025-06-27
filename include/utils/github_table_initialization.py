@@ -99,7 +99,7 @@ def create_all_tables() -> Dict:
         results[f'analytics_{timeframe}'] = create_table(
             path, schema, storage_options,
             f"Analytics {timeframe} trends", ["analysis_date"]
-        )
+        )   
     
     # Summary
     total_tables = len(results)
@@ -113,7 +113,6 @@ def create_all_tables() -> Dict:
         'total': total_tables,
         'successful': successful_tables
     }
-
 
 def ensure_all_github_tables_exist(include_analytics: bool = True) -> Dict:
     """Main function for DAG - create all tables"""

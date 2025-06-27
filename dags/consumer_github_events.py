@@ -18,6 +18,8 @@ sys.path.insert(0, str(project_root))
 
 # Import our reusable streaming utilities
 from include.streaming.streaming_utils import check_prerequisites, run_streaming_job
+from include.streaming.streaming_table_utils import ensure_streaming_table_exists
+
 
 
 # Airflow imports
@@ -33,7 +35,7 @@ def start_streaming_consumer(**context):
     print("🎯 GITHUB EVENTS STREAMING CONSUMER")
     print("=" * 60)
     print("📡 Source: github-events-raw (Kafka topic)")
-    print("💾 Target: bronze_streaming_github_keyword_extractions (Delta)")
+    print("💾 Target: bronze_github_streaming_keyword_extractions (Delta)")
     print("🔧 Resources: 1 core, 2GB memory (worker isolation)")
     print("⏰ Runtime: 15 minutes with auto-timeout")
     
@@ -149,3 +151,11 @@ consumer_task = PythonOperator(
     execution_timeout=timedelta(minutes=20),  # 20-minute Airflow timeout (5 min buffer)
     dag=dag,
 )
+
+ensure_tables_task = PythonOperator(
+    task_id="ensure_streaming_table",
+    python_callable=lambda: ensure_streaming_table_exists(),  # Use the streaming-specific function
+    dag=dag,
+)
+
+ensure_tables_task >> consumer_task

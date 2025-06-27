@@ -54,12 +54,14 @@ def check_prerequisites() -> bool:
     # Check 3: Kafka topic
     try:
         from confluent_kafka import Consumer
-        vps_ip = os.getenv('VPS_IP', 'localhost')
-        kafka_servers = f'{vps_ip}:9092' if vps_ip != 'localhost' else 'localhost:9092'
+        
+        # Always localhost for container communication
+        kafka_servers = 'kafka:29092'
+        print(f"🔍 Testing Kafka: {kafka_servers}")
         
         consumer = Consumer({
             'bootstrap.servers': kafka_servers,
-            'group.id': 'test-connection',
+            'group.id': 'test-connection', 
             'auto.offset.reset': 'latest'
         })
         metadata = consumer.list_topics(timeout=10)
@@ -158,8 +160,8 @@ def monitor_spark_process(process, timeout_minutes=15) -> dict:
                         ]
                         
                         # Skip verbose Spark logs
-                        if any(pattern in line for pattern in skip_patterns):
-                            continue
+                        # if any(pattern in line for pattern in skip_patterns):
+                        #     continue
                         
                         # Highlight important messages
                         if any(word in line.lower() for word in ['error', 'exception', 'failed']):
@@ -170,8 +172,8 @@ def monitor_spark_process(process, timeout_minutes=15) -> dict:
                             print(f"[{timestamp}] 📊 {line}")
                         elif any(word in line.lower() for word in ['started', 'completed', 'success']):
                             print(f"[{timestamp}] ✅ {line}")
-                        elif 'INFO' not in line:  # Only print non-INFO lines
-                            print(f"[{timestamp}] {line}")
+                        # elif 'INFO' not in line:  # Only print non-INFO lines
+                        #     print(f"[{timestamp}] {line}")
             
             # Check for silence (5 minutes)
             if time.time() - last_output_time > 300:
@@ -203,25 +205,29 @@ def monitor_spark_process(process, timeout_minutes=15) -> dict:
 
 def build_spark_submit_command(job_script_path, timeout_minutes=15) -> list:
     """
-    Build spark-submit command with optimized settings
-    Args:
-        job_script_path: Path to the Spark job script
-        timeout_minutes: Timeout for the job (for logging only)
-    Returns: List of command arguments
+    Build spark-submit command with ALL required packages
+    FIXED: Includes Delta Lake + S3A + Kafka packages
     """
     print(f"🔧 Building spark-submit command for {timeout_minutes} minute job")
-    
+
     return [
         "/home/airflow/.local/bin/spark-submit",
         "--master", "spark://spark-master:7077",
-        
-        # JAR files
-        "--jars", "/opt/spark/jars/hadoop-aws-3.3.6.jar,/opt/spark/jars/aws-java-sdk-bundle-1.12.367.jar,/opt/spark/jars/delta-spark_2.13-4.0.0.jar,/opt/spark/jars/delta-storage-4.0.0.jar",
-        
-        # Kafka package
-        "--packages", "org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.0",
-        
-        # Resource constraints (your optimized settings)
+        #"--master", "local[2]",
+
+        # 🚀 COMPLETE PACKAGES - Delta Lake + S3A + Kafka
+       "--jars", "/opt/spark/jars/delta-spark_2.13-4.0.0.jar,"
+           "/opt/spark/jars/delta-storage-4.0.0.jar,"
+           "/opt/spark/jars/spark-sql-kafka-0-10_2.13-4.0.0.jar,"
+           "/opt/spark/jars/kafka-clients-3.9.0.jar,"
+           "/opt/spark/jars/spark-token-provider-kafka-0-10_2.13-4.0.0.jar,"
+           "/opt/spark/jars/hadoop-aws-3.3.6.jar,"
+           "/opt/spark/jars/aws-java-sdk-bundle-1.12.367.jar",
+
+        #"--packages", "io.delta:delta-spark_2.13:4.0.0,org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.0,org.apache.hadoop:hadoop-aws:3.3.6",
+
+
+        # Resource constraints
         "--conf", "spark.dynamicAllocation.enabled=false",
         "--conf", "spark.cores.max=1",
         "--conf", "spark.executor.cores=1",
@@ -229,19 +235,20 @@ def build_spark_submit_command(job_script_path, timeout_minutes=15) -> list:
         "--conf", "spark.driver.memory=1g",
         "--conf", "spark.driver.maxResultSize=128m",
         "--conf", "spark.serializer=org.apache.spark.serializer.KryoSerializer",
+        "--conf", "spark.driver.host=airflow-worker",
         "--deploy-mode", "client",
-        
+
         # Streaming configs
         "--conf", "spark.sql.streaming.checkpointLocation=/tmp/spark-streaming-checkpoint",
         "--conf", "spark.sql.streaming.forceDeleteTempCheckpointLocation=true",
         "--conf", "spark.sql.streaming.metricsEnabled=true",
         "--conf", "spark.sql.streaming.stopGracefullyOnShutdown=true",
-        
+
         # Delta Lake
         "--conf", "spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension",
         "--conf", "spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog",
-        
-        # S3A configs (from environment)
+
+        # S3A configs (from environment) - CRITICAL FOR MINIO
         "--conf", f"spark.hadoop.fs.s3a.endpoint=http://{os.getenv('MINIO_ENDPOINT')}",
         "--conf", f"spark.hadoop.fs.s3a.access.key={os.getenv('MINIO_ACCESS_KEY')}",
         "--conf", f"spark.hadoop.fs.s3a.secret.key={os.getenv('MINIO_SECRET_KEY')}",
@@ -258,8 +265,8 @@ def build_spark_submit_command(job_script_path, timeout_minutes=15) -> list:
         "--conf", "spark.hadoop.fs.s3a.multipart.purge.age=86400000",
         "--conf", "spark.hadoop.fs.s3a.connection.maximum=100",
         "--conf", "spark.hadoop.fs.s3a.fast.upload=true",
-        
-        # The job script
+
+        # Job script
         job_script_path
     ]
 

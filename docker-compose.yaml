@@ -79,6 +79,7 @@ x-airflow-common:
     SPARK_LOCAL_DIRS: /opt/airflow/spark-tmp
     TMPDIR: /opt/airflow/spark-tmp
     JAVA_IO_TMPDIR: /opt/airflow/spark-tmp  
+    GITHUB_TOKEN: ${GITHUB_TOKEN}
   volumes:
     - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
     - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
@@ -86,6 +87,7 @@ x-airflow-common:
     - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
     - ${AIRFLOW_PROJ_DIR:-.}/include:/opt/airflow/include
     - ${AIRFLOW_PROJ_DIR:-.}/data:/opt/airflow/data
+    - airflow-tmp:/opt/airflow/spark-tmp
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     &airflow-common-depends-on
@@ -187,6 +189,7 @@ services:
 
   airflow-worker:
     <<: *airflow-common
+    hostname: airflow-worker
     command: celery worker
     healthcheck:
       # yamllint disable rule:line-length
@@ -408,20 +411,20 @@ services:
       - SPARK_WORKER_PORT=8881
       - SPARK_WORKER_WEBUI_PORT=8081
       - SPARK_WORKER_CLEANUP_ENABLED=true
-      - SPARK_WORKER_CLEANUP_INTERVAL=1800    # 30 minutes
-      - SPARK_WORKER_CLEANUP_APPDATA_TTL=3600 # 1 hour
+      - SPARK_WORKER_CLEANUP_INTERVAL=1800
+      - SPARK_WORKER_CLEANUP_APPDATA_TTL=3600
       - SPARK_CONF_DIR=/opt/spark/conf
       - PYSPARK_PYTHON=python3.12
       - PYSPARK_DRIVER_PYTHON=python3.12
       - SPARK_OPTS=--conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog
       - SPARK_WORKER_DIR=/opt/spark/work
-      # ADD THESE MINIO ENVIRONMENT VARIABLES:
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
       - MINIO_ENDPOINT=${MINIO_ENDPOINT}
       - MINIO_BUCKET=${MINIO_BUCKET}
+      - SPARK_LOCAL_DIRS=/opt/spark/tmp
     ports:
-      - "8061:8081"  # Worker 1 Web UI
+      - "8061:8081"
     deploy:
       resources:
         limits:
@@ -430,9 +433,10 @@ services:
           memory: 3G
     volumes:
       - spark-logs:/opt/spark/logs
-      - spark-events:/opt/spark/work
+      - spark-events:/opt/spark/work          # ✅ FIX: Mount work directory properly
       - ${AIRFLOW_PROJ_DIR:-.}/data:/opt/spark/data
       - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/spark/config
+      - spark-worker-1-tmp:/opt/spark/tmp     # ✅ Keep tmp separate
     depends_on:
       spark-master:
         condition: service_healthy
@@ -450,10 +454,10 @@ services:
       - SPARK_WORKER_CORES=${SPARK_WORKER_CORES:-1}
       - SPARK_WORKER_MEMORY=${SPARK_WORKER_MEMORY:-3G}
       - SPARK_WORKER_PORT=8882
-      - SPARK_WORKER_WEBUI_PORT=8082 
+      - SPARK_WORKER_WEBUI_PORT=8082
       - SPARK_WORKER_CLEANUP_ENABLED=true
-      - SPARK_WORKER_CLEANUP_INTERVAL=1800    
-      - SPARK_WORKER_CLEANUP_APPDATA_TTL=3600 
+      - SPARK_WORKER_CLEANUP_INTERVAL=1800
+      - SPARK_WORKER_CLEANUP_APPDATA_TTL=3600
       - SPARK_CONF_DIR=/opt/spark/conf
       - PYSPARK_PYTHON=python3.12
       - PYSPARK_DRIVER_PYTHON=python3.12
@@ -463,19 +467,21 @@ services:
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
       - MINIO_ENDPOINT=${MINIO_ENDPOINT}
       - MINIO_BUCKET=${MINIO_BUCKET}
+      - SPARK_LOCAL_DIRS=/opt/spark/tmp
     ports:
       - "8062:8082"
     deploy:
       resources:
         limits:
-          memory: 4G 
+          memory: 4G
         reservations:
           memory: 3G
     volumes:
       - spark-logs:/opt/spark/logs
-      - spark-events:/opt/spark/work
+      - spark-events:/opt/spark/work          # ✅ FIX: Mount work directory properly
       - ${AIRFLOW_PROJ_DIR:-.}/data:/opt/spark/data
       - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/spark/config
+      - spark-worker-2-tmp:/opt/spark/tmp     # ✅ NEW: Separate tmp volume for worker 2
     depends_on:
       spark-master:
         condition: service_healthy
@@ -650,4 +656,10 @@ volumes:
     driver: local
   # MinIO volumes
   minio-data:
+    driver: local
+  airflow-tmp:
+    driver: local
+  spark-worker-1-tmp:
+    driver: local
+  spark-worker-2-tmp:
     driver: local

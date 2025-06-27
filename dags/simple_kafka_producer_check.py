@@ -31,14 +31,8 @@ def detect_environment():
         return 'Mac'
 
 def get_kafka_bootstrap_servers():
-    """Get Kafka bootstrap servers based on environment"""
-    vps_ip = os.getenv('VPS_IP', 'localhost')
-    
-    # Use VPS_IP if available, otherwise localhost
-    if vps_ip and vps_ip != 'localhost':
-        return f'{vps_ip}:9092'
-    else:
-        return 'localhost:9092'
+    """Kafka is always localhost for container-to-container communication"""
+    return 'kafka:29092'
 
 def send_hello_message(**context):
     """Send a simple hello message to Kafka"""
