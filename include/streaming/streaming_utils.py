@@ -104,11 +104,19 @@ def monitor_spark_process(process, timeout_minutes=15) -> dict:
     Returns: dict with status and runtime info
     """
     start_time = time.time()
-    timeout_seconds = timeout_minutes * 60
+    
+    # Handle None timeout for infinite running
+    if timeout_minutes is None:
+        timeout_seconds = float('inf')
+        print(f"🔄 Monitoring process (PID: {process.pid}) indefinitely...")
+        print("⚠️  Process will run until manually stopped or container restart")
+    else:
+        timeout_seconds = timeout_minutes * 60
+        print(f"🔄 Monitoring process (PID: {process.pid}) for {timeout_minutes} minutes...")
+    
     last_output_time = start_time
     total_lines = 0
     
-    print(f"🔄 Monitoring process (PID: {process.pid}) for {timeout_minutes} minutes...")
     print("📊 Real-time output:")
     print("-" * 50)
     
@@ -125,9 +133,9 @@ def monitor_spark_process(process, timeout_minutes=15) -> dict:
                     'total_lines': total_lines
                 }
             
-            # Check timeout
+            # Check timeout (only if timeout is set)
             elapsed = time.time() - start_time
-            if elapsed > timeout_seconds:
+            if timeout_minutes is not None and elapsed > timeout_seconds:
                 print(f"\n⏰ Timeout reached ({timeout_minutes} minutes)")
                 process.terminate()
                 try:
@@ -160,8 +168,10 @@ def monitor_spark_process(process, timeout_minutes=15) -> dict:
                         ]
                         
                         # Skip verbose Spark logs
-                        # if any(pattern in line for pattern in skip_patterns):
-                        #     continue
+                        if any(pattern in line for pattern in skip_patterns):
+                            continue
+                        
+                        # Highlight important messages
                         
                         # Highlight important messages
                         if any(word in line.lower() for word in ['error', 'exception', 'failed']):

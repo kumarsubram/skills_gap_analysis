@@ -58,7 +58,7 @@ def start_streaming_consumer(**context):
     print("="*50)
     
     job_script = "/opt/airflow/include/spark_jobs/github_kafka_to_streaming_delta.py"
-    result = run_streaming_job(job_script, timeout_minutes=15)
+    result = run_streaming_job(job_script, timeout_minutes=None)
     
     # Step 3: Report results
     print("\n" + "="*50)
