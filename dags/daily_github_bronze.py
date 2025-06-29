@@ -17,7 +17,7 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 
 # CONFIGURATION
-START_DATE = "2024-11-01"
+START_DATE = "2024-11-06"
 SKIP_START = None  # Set to "2025-01-15" to skip dates
 SKIP_END = None    # Set to "2025-01-20" to skip dates  
 MIN_RECORDS_THRESHOLD = 5  # Bronze complete if > 5 records
@@ -350,7 +350,7 @@ dag = DAG(
     dag_id="daily_github_bronze",
     default_args=default_args,
     description=f"GitHub Bronze Pipeline - Continuous from {START_DATE} to yesterday",
-    schedule="0 17 * * *",  # Daily at 1 AM
+    schedule="0 17 * * *",  # Daily at 1 PM
     catchup=False,
     max_active_runs=1,  # Prevent concurrent runs
     max_active_tasks=1,  # One task at a time
