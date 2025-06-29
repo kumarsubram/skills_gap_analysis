@@ -304,10 +304,10 @@ def produce_github_events(**context):
             except Exception as e:
                 print(f"❌ Request error: {e}")
             
-            # Wait 10 seconds before next poll (faster for more coverage)
+            # Wait 3 seconds before next poll (faster for more coverage)
             if datetime.now() < end_time:
-                print(f"😴 Waiting 10 seconds... (Cycle {stats['cycles']} complete)")
-                time.sleep(10)
+                print(f"😴 Waiting 3 seconds... (Cycle {stats['cycles']} complete)")
+                time.sleep(3)
         
         print("🏁 Enhanced 1-hour production complete!")
         

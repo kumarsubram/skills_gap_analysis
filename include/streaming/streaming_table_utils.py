@@ -119,8 +119,15 @@ def create_empty_streaming_table() -> bool:
             table_or_uri=table_path,
             data=empty_table,
             storage_options=storage_options,
-            mode="overwrite"
+            mode="overwrite",
+            configuration={
+                "delta.logRetentionDuration": "1 day",
+                "delta.deletedFileRetentionDuration": "1 day",
+                "delta.autoOptimize.optimizeWrite": "true",
+                "delta.autoOptimize.autoCompact": "true"
+            }
         )
+        
         
         print("✅ Successfully created streaming table")
         print(f"📋 Schema columns: {len(schema.names)}")
