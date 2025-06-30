@@ -229,7 +229,34 @@ def process_analytics_timeframe_safe(all_gold_df: pd.DataFrame, analysis_date: s
         
         # Flatten column names
         agg_df.columns = ['technology', 'technology_category', 'total_mentions', 
-                         'avg_daily_mentions', 'peak_day_mentions', 'days_with_activity']
+                        'avg_daily_mentions', 'peak_day_mentions', 'days_with_activity']
+        
+        # 🔧 COMPREHENSIVE NOISE FILTER
+        noise_keywords = [
+            'github', 'git', 'repository', 'repo', 'commit', 'branch', 
+            'pull', 'push', 'clone', 'fork', 'star', 'issue', 'pr'
+        ]
+        agg_df = agg_df[~agg_df['technology'].isin(noise_keywords)]
+        
+        # 🔧 FIXED: Calculate rankings based on CURRENT timeframe data, not all-time
+        print(f"   📊 Calculating {timeframe}-specific rankings...")
+        
+        # Overall ranking for this timeframe
+        agg_df['mention_rank'] = agg_df['total_mentions'].rank(method='dense', ascending=False).astype('int32')
+        
+        # Category ranking for this timeframe  
+        agg_df['category_rank'] = (
+            agg_df.groupby('technology_category')['total_mentions']
+            .transform(lambda x: x.rank(method='dense', ascending=False) if len(x) > 1 else 1)
+            .fillna(1)
+            .astype('int32')
+        )
+        
+        # Debug output for rankings
+        print(f"   🔍 Sample rankings for {timeframe}:")
+        sample = agg_df.nlargest(3, 'total_mentions')[['technology', 'technology_category', 'total_mentions', 'mention_rank', 'category_rank']]
+        for _, row in sample.iterrows():
+            print(f"      #{row['mention_rank']} {row['technology']} ({row['technology_category']}) - {row['total_mentions']} mentions, category rank #{row['category_rank']}")
         
         # Step 5: Create analytics DataFrame based on timeframe
         if timeframe == 'alltime':
@@ -244,13 +271,14 @@ def process_analytics_timeframe_safe(all_gold_df: pd.DataFrame, analysis_date: s
                 'avg_daily_mentions_alltime': agg_df['avg_daily_mentions'].astype('float64'),
                 'peak_day_mentions_alltime': agg_df['peak_day_mentions'].astype('int64'),
                 'days_with_activity_alltime': agg_df['days_with_activity'].astype('int32'),
-                'mention_rank_alltime': agg_df['total_mentions'].rank(method='dense', ascending=False).astype('int32'),
-                'category_rank_alltime': agg_df.groupby('technology_category')['total_mentions'].rank(method='dense', ascending=False).astype('int32'),
+                # 🔧 FIXED: Use alltime-specific rankings (this makes sense for alltime table)
+                'mention_rank_alltime': agg_df['mention_rank'],
+                'category_rank_alltime': agg_df['category_rank'],
                 'data_completeness_alltime': (agg_df['days_with_activity'] / days_in_window * 100).round(1).astype('float64'),
                 'processed_at': pd.Timestamp.now(tz='UTC')
             })
         else:
-            # For 7d, 30d, 90d
+            # 🔧 FIXED: For 7d, 30d, 90d - use timeframe-specific rankings
             analytics_df = pd.DataFrame({
                 'analysis_date': analysis_date,
                 'window_start_date': window_start,
@@ -262,7 +290,9 @@ def process_analytics_timeframe_safe(all_gold_df: pd.DataFrame, analysis_date: s
                 f'peak_day_mentions_{timeframe}': agg_df['peak_day_mentions'].astype('int64'),
                 f'days_with_activity_{timeframe}': agg_df['days_with_activity'].astype('int32'),
                 f'trend_direction_{timeframe}': 'stable',  # Simplified for now
-                f'mention_rank_{timeframe}': agg_df['total_mentions'].rank(method='dense', ascending=False).astype('int32'),
+                # 🔧 FIXED: Use timeframe-specific rankings (not alltime!)
+                f'mention_rank_{timeframe}': agg_df['mention_rank'],
+                f'category_rank_{timeframe}': agg_df['category_rank'],
                 f'data_completeness_{timeframe}': (agg_df['days_with_activity'] / days_in_window * 100).round(1).astype('float64'),
                 'processed_at': pd.Timestamp.now(tz='UTC')
             })

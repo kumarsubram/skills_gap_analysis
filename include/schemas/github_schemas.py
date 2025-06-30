@@ -173,7 +173,7 @@ def get_silver_keyword_trends_schema() -> pa.Schema:
 
 # Analytics schemas remain the same as defined previously...
 def get_analytics_technology_trends_7d_schema() -> pa.Schema:
-    """Analytics 7-day trends schema - UNCHANGED"""
+    """Analytics 7-day trends schema - FIXED"""
     return pa.schema([
         pa.field("analysis_date", pa.string(), nullable=False),
         pa.field("window_start_date", pa.string(), nullable=False),
@@ -186,6 +186,7 @@ def get_analytics_technology_trends_7d_schema() -> pa.Schema:
         pa.field("days_with_activity_7d", pa.int32(), nullable=False),
         pa.field("trend_direction_7d", pa.string(), nullable=False),
         pa.field("mention_rank_7d", pa.int32(), nullable=False),
+        pa.field("category_rank_7d", pa.int32(), nullable=False),  # ← ADD THIS LINE
         pa.field("hotness_signal_7d", pa.string(), nullable=False),
         pa.field("data_completeness_7d", pa.float64(), nullable=False),
         pa.field("processed_at", pa.timestamp('us', tz='UTC'), nullable=False)
@@ -194,7 +195,7 @@ def get_analytics_technology_trends_7d_schema() -> pa.Schema:
 
 # Copy other analytics schemas from previous version...
 def get_analytics_technology_trends_30d_schema() -> pa.Schema:
-    """Analytics 30-day trends schema - UNCHANGED"""
+    """Analytics 30-day trends schema - FIXED"""
     return pa.schema([
         pa.field("analysis_date", pa.string(), nullable=False),
         pa.field("window_start_date", pa.string(), nullable=False),
@@ -207,13 +208,14 @@ def get_analytics_technology_trends_30d_schema() -> pa.Schema:
         pa.field("days_with_activity_30d", pa.int32(), nullable=False),
         pa.field("trend_direction_30d", pa.string(), nullable=False),
         pa.field("mention_rank_30d", pa.int32(), nullable=False),
+        pa.field("category_rank_30d", pa.int32(), nullable=False),  # ← ADD THIS LINE
         pa.field("data_completeness_30d", pa.float64(), nullable=False),
         pa.field("processed_at", pa.timestamp('us', tz='UTC'), nullable=False)
     ])
 
 
 def get_analytics_technology_trends_90d_schema() -> pa.Schema:
-    """Analytics 90-day trends schema - UNCHANGED"""
+    """Analytics 90-day trends schema - FIXED"""
     return pa.schema([
         pa.field("analysis_date", pa.string(), nullable=False),
         pa.field("window_start_date", pa.string(), nullable=False),
@@ -226,6 +228,7 @@ def get_analytics_technology_trends_90d_schema() -> pa.Schema:
         pa.field("days_with_activity_90d", pa.int32(), nullable=False),
         pa.field("trend_direction_90d", pa.string(), nullable=False),
         pa.field("mention_rank_90d", pa.int32(), nullable=False),
+        pa.field("category_rank_90d", pa.int32(), nullable=False),  # ← ADD THIS LINE
         pa.field("data_completeness_90d", pa.float64(), nullable=False),
         pa.field("processed_at", pa.timestamp('us', tz='UTC'), nullable=False)
     ])
