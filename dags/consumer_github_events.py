@@ -1,11 +1,13 @@
 """
-GitHub Events Consumer DAG - SIMPLIFIED VERSION
-===============================================
+GitHub Events Consumer DAG - COMPATIBLE WITH YOUR SCRIPT
+=======================================================
 
-Clean, simple consumer DAG using reusable streaming utilities.
-Uses optimized resource settings (1 core, 2GB) for worker isolation.
+✅ SCRIPT-MANAGED: Works with your batch-aware streaming manager
+✅ EXTERNAL CONTROL: Started/stopped by your script, not Airflow schedules  
+✅ LONG-RUNNING: Runs until explicitly stopped by script
+✅ SAME DAG NAME: consumer_github_events
 
-Place at: dags/consumer_github_events.py (replace existing)
+Replace: dags/consumer_github_events.py
 """
 
 import sys
@@ -16,11 +18,9 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-# Import our reusable streaming utilities
+# Import streaming utilities
 from include.streaming.streaming_utils import check_prerequisites, run_streaming_job
 from include.streaming.streaming_table_utils import ensure_streaming_table_exists
-# ADDED: Import for aggregation table setup
-from include.streaming.streaming_aggregation_table_utils import ensure_streaming_aggregation_table_exists
 
 # Airflow imports
 from airflow import DAG
@@ -29,157 +29,165 @@ from airflow.operators.python import PythonOperator
 
 def start_streaming_consumer(**context):
     """
-    Main task: Start the GitHub events streaming consumer
+    Streaming consumer - MANAGED BY EXTERNAL SCRIPT
+    Runs until stopped by your batch-aware streaming manager
     """
     
-    print("🎯 GITHUB EVENTS STREAMING CONSUMER")
+    print("🎯 SCRIPT-MANAGED GITHUB EVENTS CONSUMER")
     print("=" * 60)
     print("📡 Source: github-events-raw (Kafka topic)")
-    print("💾 Target: bronze_github_streaming_keyword_extractions (Delta)")
-    # ADDED: Show dual-write info
-    print("⚡ Bonus: bronze_github_streaming_daily_aggregates (Fast queries)")
-    print("🔧 Resources: 1 core, 2GB memory (worker isolation)")
-    print("⏰ Runtime: 15 minutes with auto-timeout")
+    print("💾 Target: bronze_github_streaming_keyword_extractions")
+    print("🤖 Control: Managed by batch-aware streaming script")
+    print("⏰ Runtime: Until stopped by external script")
+    print("🛑 Stop method: Script calls 'airflow tasks clear'")
     
-    # Step 1: Check prerequisites
-    print("\n" + "="*50)
+    # Step 1: Prerequisites check
+    print("\n" + "="*40)
     print("STEP 1: PREREQUISITES CHECK")
-    print("="*50)
+    print("="*40)
     
     if not check_prerequisites():
-        print("\n❌ Prerequisites check failed - aborting consumer")
-        return {
-            'status': 'failed',
-            'reason': 'prerequisites_not_met',
-            'message': 'Prerequisites check failed - see logs for details'
-        }
+        print("\n❌ Prerequisites failed - aborting")
+        # For script-managed tasks, raise exception to indicate failure
+        raise RuntimeError("Prerequisites check failed - script should retry")
     
-    # Step 2: Run streaming job
-    print("\n" + "="*50)
-    print("STEP 2: STARTING STREAMING JOB")
-    print("="*50)
+    # Step 2: Run streaming job until externally stopped
+    print("\n" + "="*40)
+    print("STEP 2: SCRIPT-MANAGED STREAMING")
+    print("="*40)
+    print("💡 Your script will stop this when needed for:")
+    print("   • Batch processing preparation")
+    print("   • High disk usage cleanup")
+    print("   • Container restarts")
+    print("   • Scheduled maintenance")
     
     job_script = "/opt/airflow/include/spark_jobs/github_kafka_to_streaming_delta.py"
-    result = run_streaming_job(job_script, timeout_minutes=None)
     
-    # Step 3: Report results
-    print("\n" + "="*50)
-    print("STEP 3: FINAL RESULTS")
-    print("="*50)
-    
-    if result.get('success', False):
-        print("🎉 CONSUMER SUCCESS")
-        print(f"✅ {result.get('message', 'Job completed')}")
-        print(f"📊 Runtime: {result.get('runtime_minutes', 0):.1f} minutes")
-        print(f"📝 Output lines: {result.get('total_lines', 0)}")
-        print("💡 Check Delta table for processed records")
-        # ADDED: Mention dual-write success
-        print("⚡ Dual-write: Raw + Aggregation tables updated")
-    else:
-        print("❌ CONSUMER FAILED")
-        print(f"💥 {result.get('message', 'Unknown error')}")
-        print("🔧 Check Spark logs and prerequisites")
-    
-    print("="*60)
-    
-    return result
+    try:
+        # Run indefinitely - script will kill this task when needed
+        result = run_streaming_job(job_script, timeout_minutes=None)
+        
+        # This should rarely be reached - only if streaming stops naturally
+        print("\n" + "="*40)
+        print("STEP 3: NATURAL COMPLETION (UNEXPECTED)")
+        print("="*40)
+        
+        if result.get('success', False):
+            print("🎉 STREAMING COMPLETED NATURALLY")
+            print(f"✅ {result.get('message', 'Completed')}")
+            print(f"📊 Runtime: {result.get('runtime_minutes', 0):.1f} minutes")
+            print("💡 Script should restart this automatically")
+            return result
+        else:
+            print("❌ STREAMING FAILED")
+            print(f"💥 {result.get('message', 'Unknown error')}")
+            # Raise exception so script knows to restart/investigate
+            raise RuntimeError(f"Streaming failed: {result.get('message', 'Unknown error')}")
+            
+    except KeyboardInterrupt:
+        print("\n🛑 STREAMING STOPPED BY SCRIPT")
+        print("✅ This is normal - script-managed shutdown")
+        # Don't raise exception for script-managed stops
+        return {
+            'status': 'stopped_by_script',
+            'success': True,
+            'message': 'Stopped by external script (normal operation)'
+        }
+    except Exception as e:
+        print(f"\n❌ STREAMING ERROR: {e}")
+        print("🔧 Script should investigate and potentially restart")
+        # Re-raise so script knows there was a problem
+        raise
 
 
-# ADDED: Combined table setup function (cleaner than separate tasks)
-def ensure_both_tables_exist(**context):
+def ensure_streaming_table_only(**context):
     """
-    Ensure both streaming tables exist before starting consumer
+    Ensure streaming table exists - called by script before starting streaming
     """
-    print("🔍 DUAL TABLE SETUP")
-    print("=" * 40)
+    print("🔍 STREAMING TABLE SETUP (SCRIPT-MANAGED)")
+    print("=" * 50)
     
-    # Setup streaming table (existing)
-    print("📊 Setting up raw streaming table...")
-    raw_success = ensure_streaming_table_exists()
+    success = ensure_streaming_table_exists()
     
-    # Setup aggregation table (new)
-    print("\n⚡ Setting up aggregation table...")
-    agg_success = ensure_streaming_aggregation_table_exists()
-    
-    # Report results
-    print("\n📋 SETUP RESULTS:")
-    print(f"   Raw table: {'✅' if raw_success else '❌'}")
-    print(f"   Agg table: {'✅' if agg_success else '❌'}")
-    
-    if raw_success and agg_success:
-        print("🎉 Both tables ready for dual-write streaming!")
-        return {'status': 'success', 'raw_table': raw_success, 'agg_table': agg_success}
+    if success:
+        print("✅ Streaming table ready for script-managed processing!")
+        return {'status': 'success', 'streaming_table': success}
     else:
-        print("❌ Table setup failed - consumer may not work properly")
-        return {'status': 'partial', 'raw_table': raw_success, 'agg_table': agg_success}
+        print("❌ Streaming table setup failed")
+        # Raise exception so script knows setup failed
+        raise RuntimeError("Failed to setup streaming table")
 
 
-# DAG Definition
+# DAG Definition - MANUAL TRIGGER ONLY (Script Controlled)
 default_args = {
     "owner": "data-engineering",
     "start_date": datetime(2025, 6, 23, tzinfo=timezone.utc),
-    "retries": 0,  # Don't retry streaming jobs
+    "retries": 0,  # No retries - let script handle restarts
     "retry_delay": timedelta(minutes=5),
     "email_on_failure": False,
     "email_on_retry": False,
 }
 
 dag = DAG(
-    dag_id="consumer_github_events",
+    dag_id="consumer_github_events",  # SAME DAG NAME
     default_args=default_args,
-    description="GitHub Events Consumer - Simplified with reusable utilities",
-    schedule=None,  # Manual trigger only
+    description="GitHub Events Consumer - Managed by external batch-aware script",
+    schedule=None,  # NO SCHEDULE - Script controls when this runs
     catchup=False,
     max_active_runs=1,  # Only one consumer at a time
     max_active_tasks=1,
-    tags=["github", "streaming", "consumer", "kafka", "delta-lake", "simplified"],
+    tags=["github", "streaming", "consumer", "script-managed", "external-control"],
     doc_md="""
-    # GitHub Events Streaming Consumer - SIMPLIFIED VERSION
+    # GitHub Events Streaming Consumer - SCRIPT-MANAGED
     
     ## 🎯 **Purpose**
-    Consumes GitHub events from Kafka and processes them into Delta Lake with keyword extraction.
+    Consumes GitHub events from Kafka - controlled by external batch-aware streaming manager script.
     
-    ## 🔧 **Key Features**
-    - ✅ **Simplified code**: Uses reusable streaming utilities
-    - ✅ **Resource isolation**: 1 core, 2GB memory (leaves other worker free)
-    - ✅ **Auto-timeout**: 15 minutes with graceful shutdown
-    - ✅ **Real-time monitoring**: Progress tracking with timestamps
-    - ✅ **Comprehensive checks**: Prerequisites validation before start
-    - ✅ **Dual-write**: Raw + Aggregation tables for fast queries
+    ## 🤖 **External Script Control**
+    This DAG is managed by your `batch_streaming_manager.sh` script:
+    - ✅ **Script starts**: `airflow dags trigger consumer_github_events`
+    - ✅ **Script stops**: `airflow tasks clear consumer_github_events --only-running`
+    - ✅ **Script monitors**: Checks if DAG is running with `airflow dags list-runs`
+    - ✅ **Script coordinates**: Stops before batch, restarts after recovery
     
-    ## 🔄 **Processing Flow**
-    1. **Table Setup**: Ensures both raw and aggregation tables exist
-    2. **Prerequisites Check**: Validates Delta table, MinIO, Kafka, Spark
-    3. **Streaming Job**: Processes Kafka events with keyword extraction
-    4. **Auto-timeout**: Graceful shutdown after 15 minutes
-    5. **Results**: Clear success/failure status with details
+    ## 🔄 **Operation Phases**
+    Your script manages these phases:
+    1. **Streaming Mode**: This DAG runs continuously
+    2. **Prep Phase**: Script stops this DAG 30min before batch
+    3. **Batch Phase**: This DAG is stopped, batch jobs run
+    4. **Recovery Phase**: Script restarts containers and this DAG
     
-    ## ⚙️ **Resource Management**
-    - **Worker isolation**: Uses only 1 Spark worker (1 core, 2GB)
-    - **Jupyter friendly**: Leaves spark-worker-2 free for other tasks
-    - **Memory efficient**: Conservative settings prevent OOM issues
+    ## 🚀 **Integration Benefits**
+    - ✅ **Resource coordination**: Script ensures batch jobs get full resources
+    - ✅ **Disk management**: Script stops streaming when disk usage high
+    - ✅ **Clean restarts**: Script restarts containers between phases
+    - ✅ **Monitoring**: Script tracks streaming status and health
     
-    ## 📊 **Monitoring**
-    - Real-time stdout with error highlighting
-    - Progress tracking with line counts
-    - Silence detection (warns if stuck)
-    - Comprehensive status reporting
+    ## 📊 **Script Configuration**
+    Your script controls:
+    - **Batch timing**: When to stop/start streaming
+    - **Disk thresholds**: When to stop for cleanup
+    - **Restart logic**: How to recover from failures
+    - **Health monitoring**: Continuous status checks
     
-    ## 🎯 **Enhanced Schema**
-    Writes to `bronze_streaming_github_keyword_extractions` with:
-    - Original batch columns (hour, keyword, mentions, etc.)
-    - Enhanced streaming columns (event_id, kafka_timestamp, etc.)
-    - Window metadata for time-based analytics
+    ## 🛑 **Manual Control**
+    While script is running:
+    - **Monitor script**: `./batch_streaming_manager.sh status`
+    - **Emergency stop**: `./batch_streaming_manager.sh stop`
+    - **Manual cleanup**: `./batch_streaming_manager.sh cleanup`
+    - **Restart streaming**: `./batch_streaming_manager.sh start`
     
-    Also writes to `bronze_github_streaming_daily_aggregates` with:
-    - Daily technology aggregates for fast SSE queries
-    - 15x performance improvement for dashboard
+    ## 💡 **Why This Approach Works**
+    - **External orchestration**: Script handles complex coordination
+    - **Airflow for execution**: DAGs focus on data processing
+    - **Resource management**: Script prevents resource conflicts
+    - **Operational simplicity**: One script controls everything
     
-    ## 🚀 **Usage**
-    - Trigger manually from Airflow UI
-    - Monitor progress in real-time via logs
-    - Consumer auto-stops after 15 minutes
-    - Check Delta tables for processed records
+    ## 🎯 **Usage Pattern**
+    1. Start script: `screen -S streaming -dm ./batch_streaming_manager.sh monitor`
+    2. Script automatically triggers this DAG during streaming phases
+    3. Script stops this DAG during batch phases
+    4. Monitor with: `./batch_streaming_manager.sh status`
     """,
 )
 
@@ -187,16 +195,16 @@ dag = DAG(
 consumer_task = PythonOperator(
     task_id="start_streaming_consumer",
     python_callable=start_streaming_consumer,
-    execution_timeout=timedelta(minutes=20),  # 20-minute Airflow timeout (5 min buffer)
+    execution_timeout=None,  # No timeout - script controls lifecycle
     dag=dag,
 )
 
-# UPDATED: Combined table setup task (cleaner than two separate tasks)
-ensure_tables_task = PythonOperator(
-    task_id="ensure_both_streaming_tables",
-    python_callable=ensure_both_tables_exist,
+# Table setup task
+ensure_table_task = PythonOperator(
+    task_id="ensure_streaming_table_only",
+    python_callable=ensure_streaming_table_only,
     dag=dag,
 )
 
-# Task dependencies (unchanged)
-ensure_tables_task >> consumer_task
+# Task dependencies
+ensure_table_task >> consumer_task

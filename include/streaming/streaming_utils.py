@@ -213,17 +213,19 @@ def monitor_spark_process(process, timeout_minutes=15) -> dict:
             }
 
 
-def build_spark_submit_command(job_script_path, timeout_minutes=15) -> list:
+def build_spark_submit_command(job_script_path, timeout_minutes=None) -> list:
     """
     Build spark-submit command with ALL required packages
-    FIXED: Includes Delta Lake + S3A + Kafka packages
+    FIXED: Supports infinite operation when timeout_minutes=None
     """
-    print(f"🔧 Building spark-submit command for {timeout_minutes} minute job")
+    if timeout_minutes is None:
+        print(f"🔧 Building spark-submit command for INFINITE operation")
+    else:
+        print(f"🔧 Building spark-submit command for {timeout_minutes} minute job")
 
     return [
         "/home/airflow/.local/bin/spark-submit",
         "--master", "spark://spark-master:7077",
-        #"--master", "local[2]",
 
         # 🚀 COMPLETE PACKAGES - Delta Lake + S3A + Kafka
        "--jars", "/opt/spark/jars/delta-spark_2.13-4.0.0.jar,"
@@ -233,9 +235,6 @@ def build_spark_submit_command(job_script_path, timeout_minutes=15) -> list:
            "/opt/spark/jars/spark-token-provider-kafka-0-10_2.13-4.0.0.jar,"
            "/opt/spark/jars/hadoop-aws-3.3.6.jar,"
            "/opt/spark/jars/aws-java-sdk-bundle-1.12.367.jar",
-
-        #"--packages", "io.delta:delta-spark_2.13:4.0.0,org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.0,org.apache.hadoop:hadoop-aws:3.3.6",
-
 
         # Resource constraints
         "--conf", "spark.dynamicAllocation.enabled=false",
@@ -281,16 +280,22 @@ def build_spark_submit_command(job_script_path, timeout_minutes=15) -> list:
     ]
 
 
-def run_streaming_job(job_script_path, timeout_minutes=15) -> dict:
+def run_streaming_job(job_script_path, timeout_minutes=None) -> dict:
     """
-    Run a streaming job with monitoring - main reusable function
+    Run a streaming job with monitoring - SUPPORTS INFINITE OPERATION
     Args:
         job_script_path: Path to the Spark streaming job script
-        timeout_minutes: How long to run before timeout
+        timeout_minutes: How long to run before timeout (None = infinite)
     Returns: dict with job results
     """
-    print(f"🚀 STARTING STREAMING JOB: {job_script_path}")
-    print(f"⏰ Timeout: {timeout_minutes} minutes")
+    if timeout_minutes is None:
+        print(f"🚀 STARTING INFINITE STREAMING JOB: {job_script_path}")
+        print("⏰ Runtime: INFINITE (until manually stopped)")
+        print("🛑 To stop: Cancel DAG or restart container")
+    else:
+        print(f"🚀 STARTING STREAMING JOB: {job_script_path}")
+        print(f"⏰ Timeout: {timeout_minutes} minutes")
+    
     print("🔧 Resources: 1 core, 2GB memory")
     
     # Build command
@@ -310,7 +315,7 @@ def run_streaming_job(job_script_path, timeout_minutes=15) -> dict:
         
         print(f"✅ Process started (PID: {process.pid})")
         
-        # Monitor with timeout
+        # Monitor with optional timeout
         result = monitor_spark_process(process, timeout_minutes)
         
         # Determine success
@@ -322,6 +327,10 @@ def run_streaming_job(job_script_path, timeout_minutes=15) -> dict:
             print("\n✅ SUCCESS: Job timed out gracefully (expected)")
             result['success'] = True
             result['message'] = f"Timed out gracefully after {result['runtime_minutes']:.1f} minutes"
+        elif result['return_code'] == 'interrupted':
+            print("\n✅ SUCCESS: Job stopped manually (expected)")
+            result['success'] = True
+            result['message'] = f"Stopped manually after {result['runtime_minutes']:.1f} minutes"
         else:
             print(f"\n❌ FAILED: Job failed with return code {result['return_code']}")
             result['success'] = False

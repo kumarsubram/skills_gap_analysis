@@ -1,10 +1,10 @@
 """
-GitHub Events Producer DAG - FIXED WITH KEYWORD FILTERING
+GitHub Events Producer DAG - FIXED PRODUCER.CLOSE() ERROR
 =========================================================
 
+✅ FIXED: Removed producer.close() - only use producer.flush()
+✅ ENHANCED: Now runs indefinitely until manually stopped (no 1-hour limit)
 ✅ SAME DAG NAME: producer_github_events (no changes to DAG ID)
-✅ ENHANCED: Now filters for technology keywords before sending to Kafka
-✅ FIXED: Proper error handling and statistics
 
 Replace: dags/producer_github_events.py
 """
@@ -14,7 +14,7 @@ import json
 import time
 import requests
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
@@ -164,9 +164,9 @@ def get_kafka_bootstrap_servers():
 
 
 def produce_github_events(**context):
-    """ENHANCED: Produce GitHub events to Kafka with keyword filtering"""
+    """FIXED: Produce GitHub events to Kafka - runs indefinitely until stopped"""
     
-    print("🚀 ENHANCED GITHUB EVENTS PRODUCER WITH FILTERING")
+    print("🚀 GITHUB EVENTS PRODUCER - RUNS UNTIL STOPPED")
     print("=" * 60)
     
     # Import Kafka producer
@@ -186,6 +186,7 @@ def produce_github_events(**context):
     print(f"🔗 Kafka: {bootstrap_servers}")
     print(f"📤 Topic: {topic}")
     print(f"🔍 Filtering for {len(keywords)} technology keywords")
+    print("⚠️  Producer will run INDEFINITELY - stop manually or restart container")
     
     # Create Kafka producer
     producer = Producer({
@@ -219,15 +220,16 @@ def produce_github_events(**context):
         'api_calls': 0
     }
     
-    # Stream for 1 hour 
+    # Start streaming
     start_time = datetime.now()
-    end_time = start_time + timedelta(hours=1)
     
-    print(f"⏰ Producing until: {end_time.strftime('%H:%M:%S')}")
+    print(f"⏰ Started at: {start_time.strftime('%H:%M:%S')}")
     print("🎯 ONLY sending events that contain technology keywords!")
+    print("🛑 To stop: Cancel DAG run or restart container")
     
     try:
-        while datetime.now() < end_time:
+        # INFINITE LOOP - runs until manually stopped
+        while True:
             stats['cycles'] += 1
             
             # Fetch GitHub events
@@ -304,25 +306,29 @@ def produce_github_events(**context):
             except Exception as e:
                 print(f"❌ Request error: {e}")
             
-            # Wait 3 seconds before next poll (faster for more coverage)
-            if datetime.now() < end_time:
-                print(f"😴 Waiting 3 seconds... (Cycle {stats['cycles']} complete)")
-                time.sleep(3)
-        
-        print("🏁 Enhanced 1-hour production complete!")
+            # Wait 3 seconds before next poll
+            print(f"😴 Waiting 3 seconds... (Cycle {stats['cycles']} complete)")
+            time.sleep(3)
         
     except KeyboardInterrupt:
-        print("🛑 Producer interrupted")
+        print("🛑 Producer interrupted by user")
     except Exception as e:
         print(f"❌ Producer error: {e}")
     finally:
-        producer.flush()
-        producer.close()
+        # FIXED: Only use flush() - NO close() method exists
+        try:
+            print("🔄 Flushing final messages...")
+            producer.flush()
+            print("✅ Final flush completed")
+        except Exception as flush_error:
+            print(f"⚠️ Warning during final flush: {flush_error}")
+        
+        # Note: confluent-kafka Producer does NOT have a close() method
         
         runtime = datetime.now() - start_time
         
         print("=" * 60)
-        print("📊 ENHANCED PRODUCTION SUMMARY:")
+        print("📊 FINAL PRODUCTION SUMMARY:")
         print(f"   📥 Total events fetched: {stats['total_events_fetched']:,}")
         print(f"   ✅ Events with keywords: {stats['events_with_keywords']:,}")
         print(f"   📤 Events sent to Kafka: {stats['events_sent_to_kafka']:,}")
@@ -330,6 +336,7 @@ def produce_github_events(**context):
         print(f"   🔄 API calls made: {stats['api_calls']}")
         print(f"   ⏰ Runtime: {runtime}")
         print(f"   📡 Topic: {topic}")
+        print(f"   🔄 Total cycles: {stats['cycles']}")
         
         if stats['keyword_matches']:
             print("   🏆 Top keywords found:")
@@ -361,21 +368,22 @@ default_args = {
     'owner': 'data-engineering',
     'start_date': datetime(2025, 6, 23),
     'email_on_failure': False,
-    'retries': 0,  # Don't retry for testing
+    'retries': 0,  # Don't retry for streaming
 }
 
 dag = DAG(
     dag_id='producer_github_events',  # ✅ SAME DAG NAME - NO CHANGES
     default_args=default_args,
-    description='Enhanced GitHub events producer - filters for technology keywords before sending to Kafka',
+    description='FIXED GitHub events producer - runs indefinitely until stopped',
     schedule=None,  # Manual trigger only
     catchup=False,
     max_active_runs=1,
-    tags=['github', 'kafka', 'producer', 'streaming', 'enhanced'],
+    tags=['github', 'kafka', 'producer', 'streaming', 'fixed', 'indefinite'],
 )
 
 produce_task = PythonOperator(
     task_id='produce_github_events',
     python_callable=produce_github_events,
+    execution_timeout=None,  # No timeout - runs indefinitely
     dag=dag,
 )

@@ -2,7 +2,9 @@
 Streaming utilities module
 
 Provides utilities for managing real-time streaming data pipelines, 
-including enhanced Delta table management, aggregation tables, and Kafka integration.
+including Delta table management and Kafka integration.
+
+UPDATED: Removed aggregation table utilities for ultra-fast performance.
 """
 
 from .streaming_table_utils import (
@@ -14,16 +16,6 @@ from .streaming_table_utils import (
     get_streaming_table_schema
 )
 
-# FIXED: Updated to use the correct function names from streaming_aggregation_table_utils
-from .streaming_aggregation_table_utils import (
-    ensure_streaming_aggregation_table_exists,
-    check_streaming_aggregation_table_exists,
-    get_streaming_aggregation_table_info,
-    print_streaming_aggregation_table_summary,
-    get_streaming_aggregation_table_path,
-    get_streaming_aggregation_schema
-)
-
 from .streaming_utils import (
     check_prerequisites,
     run_streaming_job,
@@ -32,21 +24,13 @@ from .streaming_utils import (
 )
 
 __all__ = [
-    # Raw streaming table utilities
+    # Streaming table utilities
     'ensure_streaming_table_exists',
     'check_streaming_table_exists',
     'get_streaming_table_info',
     'print_streaming_table_summary',
     'get_streaming_table_path',
     'get_streaming_table_schema',
-    
-    # FIXED: Updated aggregation table utility names
-    'ensure_streaming_aggregation_table_exists',
-    'check_streaming_aggregation_table_exists',
-    'get_streaming_aggregation_table_info',
-    'print_streaming_aggregation_table_summary',
-    'get_streaming_aggregation_table_path',
-    'get_streaming_aggregation_schema',
     
     # Streaming job utilities
     'check_prerequisites',
