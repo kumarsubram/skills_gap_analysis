@@ -269,28 +269,30 @@ def create_technology_extraction_udf(keywords):
     return udf(extract_technologies_robust, ArrayType(StringType()))
 
 
-# ADDED: New function for aggregation table writing
+# Function for aggregation table writing
 def write_to_aggregation_table(exploded_df, batch_id, epoch_id):
     """
-    ADDED: Write aggregated data to fast lookup table
+    FIXED: Write aggregated data to fast lookup table - SINGLE ROW PER TECH
+    This maintains running totals for each technology, not daily accumulation
     """
     agg_table_path = "s3a://delta-lake/bronze/bronze_github_streaming_daily_aggregates"
     
     try:
         print(f"⚡ [Batch {epoch_id}] Creating aggregation records...")
         
-        # Get current timestamp and date
+        # Use current timestamp for all time fields
+        from pyspark.sql.functions import current_timestamp, current_date
         now_timestamp = current_timestamp()
-        current_date = now_timestamp.cast("date")
+        today_date = current_date()
         
-        # Create aggregation DataFrame - daily totals by technology
-        agg_df = exploded_df.groupBy("keyword").agg(
+        # Create aggregation DataFrame - NEW COUNTS from this batch
+        new_agg_df = exploded_df.groupBy("keyword").agg(
             count("event_id").alias("new_mentions"),
             countDistinct("repo_name").alias("new_repo_count"),
             count("event_id").alias("new_event_count"),
             first("repo_name").alias("sample_repo")
         ).select(
-            current_date.alias("date"),
+            today_date.alias("date"),
             col("keyword").alias("technology"),
             col("new_mentions").cast("long").alias("daily_mentions"),
             col("new_repo_count").cast("long").alias("repo_count"),
@@ -301,62 +303,78 @@ def write_to_aggregation_table(exploded_df, batch_id, epoch_id):
             lit(batch_id).alias("processing_batch")
         )
         
-        agg_count = agg_df.count()
-        print(f"📊 [Batch {epoch_id}] Aggregation records to merge: {agg_count}")
+        agg_count = new_agg_df.count()
+        print(f"📊 [Batch {epoch_id}] New aggregation records: {agg_count}")
         
         if agg_count > 0:
-            # Check if aggregation table exists and try to merge
-            if DELTA_AVAILABLE:
-                try:
-                    # Try to load existing aggregation table
-                    spark = exploded_df.sql_ctx.sparkSession
-                    agg_delta_table = DeltaTable.forPath(spark, agg_table_path)
-                    
-                    print(f"🔄 [Batch {epoch_id}] Merging with existing aggregation table...")
-                    
-                    # Perform smart merge - add new mentions to existing totals
-                    agg_delta_table.alias("existing") \
-                        .merge(
-                            agg_df.alias("new"),
-                            "existing.date = new.date AND existing.technology = new.technology"
-                        ) \
-                        .whenMatchedUpdate(set={
-                            "daily_mentions": col("existing.daily_mentions") + col("new.daily_mentions"),
-                            "repo_count": col("existing.repo_count") + col("new.repo_count"),
-                            "event_count": col("existing.event_count") + col("new.event_count"),
-                            "last_activity": col("new.last_activity"),
-                            "last_updated": col("new.last_updated"),
-                            "processing_batch": col("new.processing_batch")
-                        }) \
-                        .whenNotMatchedInsertAll() \
-                        .execute()
-                    
-                    print(f"✅ [Batch {epoch_id}] Aggregation merge completed")
-                    
-                except Exception:
-                    # If aggregation table doesn't exist, create it
-                    print(f"📝 [Batch {epoch_id}] Aggregation table not found, creating new one...")
-                    
-                    agg_df.write \
-                        .format("delta") \
-                        .mode("overwrite") \
-                        .save(agg_table_path)
-                    
-                    print(f"✅ [Batch {epoch_id}] New aggregation table created with {agg_count} records")
-            else:
-                # Fallback: simple append if Delta merge not available
-                print(f"📝 [Batch {epoch_id}] Using append mode for aggregation table...")
-                agg_df.write \
+            # FIXED: Use overwrite mode to replace the entire table
+            # This ensures only ONE row per technology with latest counts
+            print(f"🔄 [Batch {epoch_id}] Overwriting aggregation table with latest counts...")
+            
+            # Get existing data first (if table exists)
+            spark = exploded_df.sql_ctx.sparkSession
+            existing_df = None
+            
+            try:
+                # Try to read existing data
+                existing_df = spark.read.format("delta").load(agg_table_path)
+                print(f"📖 [Batch {epoch_id}] Found existing aggregation data")
+                
+                # Combine existing + new data, keeping only latest per technology
+                from pyspark.sql.window import Window
+                
+                # Union existing and new data
+                combined_df = existing_df.union(new_agg_df)
+                
+                # Keep only the LATEST record per technology (by last_updated)
+                window_spec = Window.partitionBy("technology").orderBy(col("last_updated").desc())
+                from pyspark.sql.functions import row_number
+                
+                latest_per_tech_df = combined_df.withColumn(
+                    "row_num", row_number().over(window_spec)
+                ).filter(col("row_num") == 1).drop("row_num")
+                
+                # Write the consolidated data
+                latest_per_tech_df.write \
                     .format("delta") \
-                    .mode("append") \
+                    .mode("overwrite") \
                     .save(agg_table_path)
                 
-                print(f"✅ [Batch {epoch_id}] Aggregation records appended: {agg_count}")
+                final_count = latest_per_tech_df.count()
+                print(f"✅ [Batch {epoch_id}] Aggregation table updated - {final_count} unique technologies")
+                
+            except Exception:
+                # Table doesn't exist, create new one
+                print(f"📝 [Batch {epoch_id}] Creating new aggregation table...")
+                
+                new_agg_df.write \
+                    .format("delta") \
+                    .mode("overwrite") \
+                    .save(agg_table_path)
+                
+                print(f"✅ [Batch {epoch_id}] New aggregation table created with {agg_count} technologies")
+            
+            # Show current state
+            try:
+                current_state = spark.read.format("delta").load(agg_table_path) \
+                    .select("technology", "daily_mentions", "repo_count") \
+                    .orderBy(col("daily_mentions").desc()) \
+                    .limit(5) \
+                    .collect()
+                
+                print(f"📊 [Batch {epoch_id}] Current top technologies:")
+                for i, row in enumerate(current_state):
+                    print(f"   {i+1}. {row.technology}: {row.daily_mentions} mentions, {row.repo_count} repos")
+                    
+            except Exception as e:
+                print(f"⚠️ [Batch {epoch_id}] Could not show current state: {e}")
         
         return True
         
     except Exception as e:
         print(f"❌ [Batch {epoch_id}] Aggregation write error: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
