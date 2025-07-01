@@ -2,6 +2,8 @@
 Exact Schema Match GitHub Kafka to Streaming Delta Consumer
 ==========================================================
 Replace: include/spark_jobs/github_kafka_to_streaming_delta.py
+
+MINIMAL CHANGES: Only added dual-write functionality to existing working code
 """
 
 import sys
@@ -17,11 +19,21 @@ from pathlib import Path
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col, lit, current_timestamp, size, from_json, udf, 
-    explode, coalesce, count
+    explode, coalesce, count,
+    # ADDED: Additional functions for aggregation
+    countDistinct, first
 )
 from pyspark.sql.types import (
     ArrayType, StringType, StructType, StructField, IntegerType, DateType, TimestampType
 )
+
+# ADDED: For Delta merge operations
+try:
+    from delta.tables import DeltaTable
+    DELTA_AVAILABLE = True
+except ImportError:
+    print("⚠️ Delta tables not available for merge operations")
+    DELTA_AVAILABLE = False
 
 # Add project root for imports
 project_root = Path(__file__).parent.parent.parent
@@ -257,8 +269,99 @@ def create_technology_extraction_udf(keywords):
     return udf(extract_technologies_robust, ArrayType(StringType()))
 
 
+# ADDED: New function for aggregation table writing
+def write_to_aggregation_table(exploded_df, batch_id, epoch_id):
+    """
+    ADDED: Write aggregated data to fast lookup table
+    """
+    agg_table_path = "s3a://delta-lake/bronze/bronze_github_streaming_daily_aggregates"
+    
+    try:
+        print(f"⚡ [Batch {epoch_id}] Creating aggregation records...")
+        
+        # Get current timestamp and date
+        now_timestamp = current_timestamp()
+        current_date = now_timestamp.cast("date")
+        
+        # Create aggregation DataFrame - daily totals by technology
+        agg_df = exploded_df.groupBy("keyword").agg(
+            count("event_id").alias("new_mentions"),
+            countDistinct("repo_name").alias("new_repo_count"),
+            count("event_id").alias("new_event_count"),
+            first("repo_name").alias("sample_repo")
+        ).select(
+            current_date.alias("date"),
+            col("keyword").alias("technology"),
+            col("new_mentions").cast("long").alias("daily_mentions"),
+            col("new_repo_count").cast("long").alias("repo_count"),
+            col("new_event_count").cast("long").alias("event_count"),
+            now_timestamp.alias("last_activity"),
+            now_timestamp.alias("last_updated"),
+            col("sample_repo").alias("top_repo"),
+            lit(batch_id).alias("processing_batch")
+        )
+        
+        agg_count = agg_df.count()
+        print(f"📊 [Batch {epoch_id}] Aggregation records to merge: {agg_count}")
+        
+        if agg_count > 0:
+            # Check if aggregation table exists and try to merge
+            if DELTA_AVAILABLE:
+                try:
+                    # Try to load existing aggregation table
+                    spark = exploded_df.sql_ctx.sparkSession
+                    agg_delta_table = DeltaTable.forPath(spark, agg_table_path)
+                    
+                    print(f"🔄 [Batch {epoch_id}] Merging with existing aggregation table...")
+                    
+                    # Perform smart merge - add new mentions to existing totals
+                    agg_delta_table.alias("existing") \
+                        .merge(
+                            agg_df.alias("new"),
+                            "existing.date = new.date AND existing.technology = new.technology"
+                        ) \
+                        .whenMatchedUpdate(set={
+                            "daily_mentions": col("existing.daily_mentions") + col("new.daily_mentions"),
+                            "repo_count": col("existing.repo_count") + col("new.repo_count"),
+                            "event_count": col("existing.event_count") + col("new.event_count"),
+                            "last_activity": col("new.last_activity"),
+                            "last_updated": col("new.last_updated"),
+                            "processing_batch": col("new.processing_batch")
+                        }) \
+                        .whenNotMatchedInsertAll() \
+                        .execute()
+                    
+                    print(f"✅ [Batch {epoch_id}] Aggregation merge completed")
+                    
+                except Exception:
+                    # If aggregation table doesn't exist, create it
+                    print(f"📝 [Batch {epoch_id}] Aggregation table not found, creating new one...")
+                    
+                    agg_df.write \
+                        .format("delta") \
+                        .mode("overwrite") \
+                        .save(agg_table_path)
+                    
+                    print(f"✅ [Batch {epoch_id}] New aggregation table created with {agg_count} records")
+            else:
+                # Fallback: simple append if Delta merge not available
+                print(f"📝 [Batch {epoch_id}] Using append mode for aggregation table...")
+                agg_df.write \
+                    .format("delta") \
+                    .mode("append") \
+                    .save(agg_table_path)
+                
+                print(f"✅ [Batch {epoch_id}] Aggregation records appended: {agg_count}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ [Batch {epoch_id}] Aggregation write error: {e}")
+        return False
+
+
 def write_to_streaming_delta(dataframe, epoch_id):
-    """Write to Delta with EXACT schema matching"""
+    """Write to Delta with EXACT schema matching - ENHANCED with dual-write"""
     
     streaming_table_path = "s3a://delta-lake/bronze/bronze_github_streaming_keyword_extractions"
     batch_id = f"batch_{epoch_id}_{int(time.time())}"
@@ -302,18 +405,21 @@ def write_to_streaming_delta(dataframe, epoch_id):
             col("processing_time")
         )
         
-        # Step 4: Aggregate by keyword and repo
+        # ADDED: Write to aggregation table (before original processing)
+        agg_success = write_to_aggregation_table(exploded_df, batch_id, epoch_id)
+        
+        # Step 4: Aggregate by keyword and repo (ORIGINAL LOGIC - UNCHANGED)
         aggregated_df = exploded_df.groupBy("keyword", "repo_name").agg(
             count("event_id").alias("mention_count")
         )
         
-        # Step 5: Create DataFrame with EXACT schema match
+        # Step 5: Create DataFrame with EXACT schema match (ORIGINAL LOGIC - UNCHANGED)
         print(f"🔧 [Batch {epoch_id}] Creating exact schema match...")
         
         # Get current timestamp ONCE to ensure consistency
         now_timestamp = current_timestamp()
         
-        # Create final DataFrame with EXACT field order and types
+        # Create final DataFrame with EXACTLY the same logic as before
         final_df = aggregated_df.select(
             # EXACT ORDER AS YOUR SCHEMA
             lit(23).cast(IntegerType()).alias("hour"),                                    # hour: IntegerType
@@ -339,7 +445,7 @@ def write_to_streaming_delta(dataframe, epoch_id):
         final_count = final_df.count()
         print(f"📊 [Batch {epoch_id}] Final records to write: {final_count}")
         
-        # Step 6: Verify schema before write
+        # Step 6: Verify schema before write (ORIGINAL LOGIC - UNCHANGED)
         actual_schema = final_df.schema
         target_schema = get_exact_target_schema()
         
@@ -362,7 +468,7 @@ def write_to_streaming_delta(dataframe, epoch_id):
         
         print(f"✅ [Batch {epoch_id}] Schema match verified!")
         
-        # Step 7: Write to Delta table
+        # Step 7: Write to Delta table (ORIGINAL LOGIC - UNCHANGED)
         print(f"🔄 [Batch {epoch_id}] Writing to Delta table...")
         
         final_df.write \
@@ -378,6 +484,10 @@ def write_to_streaming_delta(dataframe, epoch_id):
             written_sample = final_df.collect()
             for i, record in enumerate(written_sample):
                 print(f"   {i+1}. {record.keyword}: {record.mentions} mentions in {record.top_repo}")
+        
+        # ADDED: Report dual-write success
+        dual_write_status = "✅" if agg_success else "⚠️"
+        print(f"{dual_write_status} [Batch {epoch_id}] Dual-write status: Raw table ✅, Aggregation table {dual_write_status}")
         
         print(f"🎉 [Batch {epoch_id}] Batch processing completed successfully!")
         
@@ -408,6 +518,8 @@ def main():
     print()
     print("📡 Source: github-events-raw (Kafka topic)")
     print("💾 Target: bronze_github_streaming_keyword_extractions")
+    # ADDED: Show dual-write info
+    print("⚡ Bonus: bronze_github_streaming_daily_aggregates (fast queries)")
     print("=" * 60)
     
     spark = None
@@ -473,6 +585,8 @@ def main():
         print("\n💾 Starting exact schema-matched streaming write...")
         print("⏰ Processing micro-batches every 30 seconds")
         print("🔍 Schema verification enabled for each batch")
+        # ADDED: Mention dual-write
+        print("⚡ Dual-write: Raw + Aggregation tables")
         print("-" * 60)
         
         streaming_query = processed_stream \

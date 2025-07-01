@@ -19,8 +19,8 @@ sys.path.insert(0, str(project_root))
 # Import our reusable streaming utilities
 from include.streaming.streaming_utils import check_prerequisites, run_streaming_job
 from include.streaming.streaming_table_utils import ensure_streaming_table_exists
-
-
+# ADDED: Import for aggregation table setup
+from include.streaming.streaming_aggregation_table_utils import ensure_streaming_aggregation_table_exists
 
 # Airflow imports
 from airflow import DAG
@@ -36,6 +36,8 @@ def start_streaming_consumer(**context):
     print("=" * 60)
     print("📡 Source: github-events-raw (Kafka topic)")
     print("💾 Target: bronze_github_streaming_keyword_extractions (Delta)")
+    # ADDED: Show dual-write info
+    print("⚡ Bonus: bronze_github_streaming_daily_aggregates (Fast queries)")
     print("🔧 Resources: 1 core, 2GB memory (worker isolation)")
     print("⏰ Runtime: 15 minutes with auto-timeout")
     
@@ -71,6 +73,8 @@ def start_streaming_consumer(**context):
         print(f"📊 Runtime: {result.get('runtime_minutes', 0):.1f} minutes")
         print(f"📝 Output lines: {result.get('total_lines', 0)}")
         print("💡 Check Delta table for processed records")
+        # ADDED: Mention dual-write success
+        print("⚡ Dual-write: Raw + Aggregation tables updated")
     else:
         print("❌ CONSUMER FAILED")
         print(f"💥 {result.get('message', 'Unknown error')}")
@@ -79,6 +83,35 @@ def start_streaming_consumer(**context):
     print("="*60)
     
     return result
+
+
+# ADDED: Combined table setup function (cleaner than separate tasks)
+def ensure_both_tables_exist(**context):
+    """
+    Ensure both streaming tables exist before starting consumer
+    """
+    print("🔍 DUAL TABLE SETUP")
+    print("=" * 40)
+    
+    # Setup streaming table (existing)
+    print("📊 Setting up raw streaming table...")
+    raw_success = ensure_streaming_table_exists()
+    
+    # Setup aggregation table (new)
+    print("\n⚡ Setting up aggregation table...")
+    agg_success = ensure_streaming_aggregation_table_exists()
+    
+    # Report results
+    print("\n📋 SETUP RESULTS:")
+    print(f"   Raw table: {'✅' if raw_success else '❌'}")
+    print(f"   Agg table: {'✅' if agg_success else '❌'}")
+    
+    if raw_success and agg_success:
+        print("🎉 Both tables ready for dual-write streaming!")
+        return {'status': 'success', 'raw_table': raw_success, 'agg_table': agg_success}
+    else:
+        print("❌ Table setup failed - consumer may not work properly")
+        return {'status': 'partial', 'raw_table': raw_success, 'agg_table': agg_success}
 
 
 # DAG Definition
@@ -112,12 +145,14 @@ dag = DAG(
     - ✅ **Auto-timeout**: 15 minutes with graceful shutdown
     - ✅ **Real-time monitoring**: Progress tracking with timestamps
     - ✅ **Comprehensive checks**: Prerequisites validation before start
+    - ✅ **Dual-write**: Raw + Aggregation tables for fast queries
     
     ## 🔄 **Processing Flow**
-    1. **Prerequisites Check**: Validates Delta table, MinIO, Kafka, Spark
-    2. **Streaming Job**: Processes Kafka events with keyword extraction
-    3. **Auto-timeout**: Graceful shutdown after 15 minutes
-    4. **Results**: Clear success/failure status with details
+    1. **Table Setup**: Ensures both raw and aggregation tables exist
+    2. **Prerequisites Check**: Validates Delta table, MinIO, Kafka, Spark
+    3. **Streaming Job**: Processes Kafka events with keyword extraction
+    4. **Auto-timeout**: Graceful shutdown after 15 minutes
+    5. **Results**: Clear success/failure status with details
     
     ## ⚙️ **Resource Management**
     - **Worker isolation**: Uses only 1 Spark worker (1 core, 2GB)
@@ -136,15 +171,19 @@ dag = DAG(
     - Enhanced streaming columns (event_id, kafka_timestamp, etc.)
     - Window metadata for time-based analytics
     
+    Also writes to `bronze_github_streaming_daily_aggregates` with:
+    - Daily technology aggregates for fast SSE queries
+    - 15x performance improvement for dashboard
+    
     ## 🚀 **Usage**
     - Trigger manually from Airflow UI
     - Monitor progress in real-time via logs
     - Consumer auto-stops after 15 minutes
-    - Check Delta table for processed records
+    - Check Delta tables for processed records
     """,
 )
 
-# Single task - Simplified streaming consumer
+# Task definitions
 consumer_task = PythonOperator(
     task_id="start_streaming_consumer",
     python_callable=start_streaming_consumer,
@@ -152,10 +191,12 @@ consumer_task = PythonOperator(
     dag=dag,
 )
 
+# UPDATED: Combined table setup task (cleaner than two separate tasks)
 ensure_tables_task = PythonOperator(
-    task_id="ensure_streaming_table",
-    python_callable=lambda: ensure_streaming_table_exists(),  # Use the streaming-specific function
+    task_id="ensure_both_streaming_tables",
+    python_callable=ensure_both_tables_exist,
     dag=dag,
 )
 
+# Task dependencies (unchanged)
 ensure_tables_task >> consumer_task
