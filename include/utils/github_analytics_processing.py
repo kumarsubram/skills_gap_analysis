@@ -233,7 +233,7 @@ def process_analytics_timeframe_safe(all_gold_df: pd.DataFrame, analysis_date: s
         
         # 🔧 COMPREHENSIVE NOISE FILTER
         noise_keywords = [
-            'github', 'git', 'repository', 'repo', 'commit', 'branch', 
+            'github', 'repository', 'repo', 'commit', 'branch', 
             'pull', 'push', 'clone', 'fork', 'star', 'issue', 'pr'
         ]
         agg_df = agg_df[~agg_df['technology'].isin(noise_keywords)]
