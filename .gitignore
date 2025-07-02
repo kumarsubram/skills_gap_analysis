@@ -36,6 +36,10 @@ derby.log
 *.swo
 *~
 
+# Claude
+CLAUDE.md
+Can
+
 # OS generated files
 .DS_Store
 .DS_Store?
