@@ -4,7 +4,9 @@ A production-ready data platform implementing medallion architecture (Bronze →
 
 ## 🎯 Key Features
 
-- **Real-time streaming** with Kafka and Spark Structured Streaming
+- **Real-time streaming** with Kafka (3-hour retention) and Spark Structured Streaming
+- **Latest-only consumption** for real-time dashboards (30-second rolling windows)
+- **Automatic hourly restarts** to ensure fresh data and prevent memory issues
 - **Batch processing** with historical data backfill capabilities
 - **Medallion architecture** for data quality and governance
 - **Automated orchestration** with dependency-aware DAG scheduling
@@ -48,9 +50,10 @@ docker compose ps
 
 ### 3. Access Web Interfaces
 - **Airflow**: `http://localhost:8085` (use credentials from .env)
-- **Spark Master**: `http://localhost:8060`
+- **Spark**: `http://localhost:8060`
 - **Kafka UI**: `http://localhost:9090` (use credentials from .env)
-- **MinIO Console**: `http://localhost:9001` (use credentials from .env)
+- **MinIO**: `http://localhost:9001` (use credentials from .env)
+- **JupyterLab**: `http://localhost:8888` (use token from .env)
 - **JupyterLab**: `http://localhost:8888` (use token from .env)
 
 ## 🏗️ Data Architecture
@@ -153,9 +156,12 @@ MinIO automatically creates these buckets:
 
 ### Available DAGs
 
-#### Streaming Pipeline (Real-time)
-- **`producer_github_events`**: Streams GitHub events → Kafka (manual trigger)
-- **`consumer_github_events`**: Kafka → Bronze Delta tables (script-managed)
+#### Streaming Pipeline (Real-time Dashboard)
+- **`producer_github_events`**: Filters GitHub events by tech keywords → Kafka (3-second intervals)
+- **`consumer_github_events`**: Kafka → Bronze Delta tables (5-second micro-batches, hourly restarts)
+  - **Purpose**: Powers 30-second rolling dashboard with latest GitHub trends
+  - **Strategy**: Always consumes from latest offset (skips old messages)
+  - **Restart**: Automatic hourly restart for fresh data and memory management
 
 #### Batch Pipeline (Scheduled)
 - **`daily_github_bronze`**: Historical GitHub data → Bronze (1 PM daily)
@@ -171,10 +177,31 @@ MinIO automatically creates these buckets:
 ### Pipeline Coordination
 
 The platform uses a batch-aware streaming manager (`scripts/batch_streaming_manager`) to coordinate:
-- **Streaming Phase**: Real-time processing during off-hours
-- **Prep Phase**: Stops streaming 30 minutes before batch jobs
-- **Batch Phase**: Historical data processing (1-5 PM daily)
-- **Recovery Phase**: Container restarts and streaming resume
+
+#### Real-Time Streaming Configuration
+- **Kafka Retention**: 3 hours (messages older than 3 hours are deleted)
+- **Consumer Strategy**: Always starts from latest messages (no lag concerns)
+- **Restart Cycle**: Every hour for fresh data and consistent performance
+- **Processing Interval**: 5-second micro-batches for near real-time updates
+
+#### Daily Schedule
+- **Streaming Phase**: Real-time processing (5:30 PM - 12:30 PM next day)
+- **Prep Phase**: Stops streaming 30 minutes before batch (12:30 PM - 1:00 PM)
+- **Batch Phase**: Historical data processing (1:00 PM - 5:00 PM)
+- **Recovery Phase**: Container restarts and streaming resume (5:00 PM - 5:30 PM)
+
+#### Starting the Manager
+```bash
+# Run in screen session (recommended)
+screen -S streaming -dm ./scripts/batch_streaming_manager monitor
+
+# Check status
+./scripts/batch_streaming_manager status
+
+# Manual control
+./scripts/batch_streaming_manager stop    # Stop streaming
+./scripts/batch_streaming_manager start   # Start streaming
+```
 
 ### Data Processing Examples
 

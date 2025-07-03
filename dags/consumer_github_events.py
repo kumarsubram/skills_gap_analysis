@@ -29,17 +29,17 @@ from airflow.operators.python import PythonOperator
 
 def start_streaming_consumer(**context):
     """
-    Streaming consumer - MANAGED BY EXTERNAL SCRIPT
-    Runs until stopped by your batch-aware streaming manager
+    Real-time trends consumer - FRESH RESTART EVERY HOUR
+    Always starts with latest messages for 30-second rolling dashboard
     """
     
-    print("🎯 SCRIPT-MANAGED GITHUB EVENTS CONSUMER")
+    print("🎯 REAL-TIME TRENDS CONSUMER (HOURLY RESTART)")
     print("=" * 60)
-    print("📡 Source: github-events-raw (Kafka topic)")
+    print("📡 Source: github-events-raw (latest messages only)")
     print("💾 Target: bronze_github_streaming_keyword_extractions")
-    print("🤖 Control: Managed by batch-aware streaming script")
-    print("⏰ Runtime: Until stopped by external script")
-    print("🛑 Stop method: Script calls 'airflow tasks clear'")
+    print("🎯 Purpose: 30-second rolling dashboard updates")
+    print("⏰ Runtime: 1 hour max (auto-restart for freshness)")
+    print("🔄 Strategy: Skip old messages, always start fresh")
     
     # Step 1: Prerequisites check
     print("\n" + "="*40)
@@ -64,29 +64,30 @@ def start_streaming_consumer(**context):
     job_script = "/opt/airflow/include/spark_jobs/github_kafka_to_streaming_delta.py"
     
     try:
-        # Run indefinitely - script will kill this task when needed
-        result = run_streaming_job(job_script, timeout_minutes=None)
+        # Run for 1 hour max - auto-restart for real-time freshness
+        print("🔄 Running for 1 hour max to ensure fresh real-time data")
+        result = run_streaming_job(job_script, timeout_minutes=60)
         
-        # This should rarely be reached - only if streaming stops naturally
+        # Expected completion after 1 hour
         print("\n" + "="*40)
-        print("STEP 3: NATURAL COMPLETION (UNEXPECTED)")
+        print("STEP 3: HOURLY RESTART (EXPECTED)")
         print("="*40)
         
         if result.get('success', False):
-            print("🎉 STREAMING COMPLETED NATURALLY")
-            print(f"✅ {result.get('message', 'Completed')}")
+            print("🔄 HOURLY RESTART COMPLETED SUCCESSFULLY")
+            print(f"✅ {result.get('message', 'Completed after 1 hour')}")
             print(f"📊 Runtime: {result.get('runtime_minutes', 0):.1f} minutes")
-            print("💡 Script should restart this automatically")
+            print("💡 Script will restart for fresh real-time data")
             return result
         else:
-            print("❌ STREAMING FAILED")
+            print("❌ STREAMING FAILED DURING HOUR")
             print(f"💥 {result.get('message', 'Unknown error')}")
             # Raise exception so script knows to restart/investigate
             raise RuntimeError(f"Streaming failed: {result.get('message', 'Unknown error')}")
             
     except KeyboardInterrupt:
         print("\n🛑 STREAMING STOPPED BY SCRIPT")
-        print("✅ This is normal - script-managed shutdown")
+        print("✅ This is normal - script-managed shutdown or hourly restart")
         # Don't raise exception for script-managed stops
         return {
             'status': 'stopped_by_script',
@@ -131,12 +132,12 @@ default_args = {
 dag = DAG(
     dag_id="consumer_github_events",  # SAME DAG NAME
     default_args=default_args,
-    description="GitHub Events Consumer - Managed by external batch-aware script",
+    description="Real-time GitHub Trends Consumer - Hourly fresh restarts for latest data",
     schedule=None,  # NO SCHEDULE - Script controls when this runs
     catchup=False,
     max_active_runs=1,  # Only one consumer at a time
     max_active_tasks=1,
-    tags=["github", "streaming", "consumer", "script-managed", "external-control"],
+    tags=["github", "streaming", "consumer", "real-time", "hourly-restart", "latest-only"],
     doc_md="""
     # GitHub Events Streaming Consumer - SCRIPT-MANAGED
     

@@ -31,6 +31,11 @@
 
 set -euo pipefail
 
+# Load environment variables from .env if it exists
+if [ -f "$(dirname "$0")/../.env" ]; then
+    export $(grep -v '^#' "$(dirname "$0")/../.env" | xargs)
+fi
+
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
@@ -97,12 +102,17 @@ phase() { echo -e "${PURPLE}[$(date '+%H:%M:%S')] 🔄${NC} $1" | tee -a "$LOG_F
 
 # SECURITY: Never hardcode credentials - use environment variables
 get_auth_header() {
-    if [ -z "${AIRFLOW_USER:-}" ] || [ -z "${AIRFLOW_PASS:-}" ]; then
-        error "AIRFLOW_USER and AIRFLOW_PASS environment variables required"
-        echo "Example: export AIRFLOW_USER=admin && export AIRFLOW_PASS=yourpassword"
+    # Check for standard naming first, then fall back to .env naming
+    local user="${AIRFLOW_USER:-${_AIRFLOW_WWW_USER_USERNAME:-}}"
+    local pass="${AIRFLOW_PASS:-${_AIRFLOW_WWW_USER_PASSWORD:-}}"
+    
+    if [ -z "$user" ] || [ -z "$pass" ]; then
+        error "Authentication environment variables required"
+        echo "Set AIRFLOW_USER and AIRFLOW_PASS, or"
+        echo "Source .env file: source .env"
         exit 1
     fi
-    echo "${AIRFLOW_USER}:${AIRFLOW_PASS}"
+    echo "${user}:${pass}"
 }
 
 # =============================================================================
@@ -480,12 +490,13 @@ handle_streaming_phase() {
 # =============================================================================
 
 main_monitor() {
-    log "🚀 AIRFLOW 3.0 STREAMING MANAGER STARTED"
+    log "🚀 REAL-TIME TRENDS MANAGER STARTED"
     log "📅 Batch window: ${BATCH_START_HOUR}:00 - ${BATCH_END_HOUR}:00"
     log "⏰ Current time: $(date '+%H:%M')"
     log "💾 Disk usage: $(get_disk_usage_gb)"
-    log "📡 Streaming DAGs: ${STREAMING_DAGS[*]}"
+    log "📡 Real-time DAGs: ${STREAMING_DAGS[*]} (hourly restarts)"
     log "🏭 Batch DAGs: ${BATCH_DAGS[*]}"
+    log "🎯 Purpose: 30-second rolling dashboard with latest data"
     log "🌐 Airflow UI: http://localhost:8085"
     
     # Validate environment

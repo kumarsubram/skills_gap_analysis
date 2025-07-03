@@ -54,15 +54,15 @@ def signal_handler(signum, frame):
 
 
 def clean_checkpoint_directory():
-    """Clean checkpoint directory for fresh start"""
-    checkpoint_dir = "/tmp/spark-streaming-checkpoint/github-consumer"
+    """Clean checkpoint directory for FRESH REAL-TIME START"""
+    checkpoint_dir = "/tmp/spark-streaming-checkpoint/github-realtime"
     try:
         if os.path.exists(checkpoint_dir):
-            print(f"🧹 Cleaning checkpoint directory: {checkpoint_dir}")
+            print(f"🧹 Cleaning checkpoint for fresh real-time start: {checkpoint_dir}")
             shutil.rmtree(checkpoint_dir)
-            print("✅ Checkpoint directory cleaned")
+            print("✅ Checkpoint cleaned - starting fresh for latest data")
         else:
-            print("ℹ️ Checkpoint directory doesn't exist - good for fresh start")
+            print("ℹ️ No checkpoint - perfect for real-time fresh start")
     except OSError as dir_error:
         print(f"⚠️ Warning: Could not clean checkpoint directory: {dir_error}")
 
@@ -111,7 +111,9 @@ def create_spark_session():
         .config("spark.sql.adaptive.coalescePartitions.enabled", "false") \
         .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer") \
         .config("spark.sql.streaming.stopGracefullyOnShutdown", "true") \
-        .config("spark.sql.streaming.stopTimeout", "10s") \
+        .config("spark.sql.streaming.stopTimeout", "30s") \
+        .config("spark.streaming.stopGracefullyOnShutdown", "true") \
+        .config("spark.kafka.consumer.cache.enabled", "false") \
         .getOrCreate()
     
     # Set log level to reduce noise
@@ -319,14 +321,14 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
     
-    print("🚀 ULTRA-FAST GITHUB KAFKA CONSUMER")
+    print("🚀 REAL-TIME GITHUB TRENDS CONSUMER")
     print("=" * 60)
     
     spark = None
     streaming_query = None
     
     try:
-        # Clean checkpoint for fresh start
+        # Always clean checkpoint for fresh real-time start
         clean_checkpoint_directory()
         
         # Initialize Spark session
@@ -340,7 +342,7 @@ def main():
         extract_tech_udf = create_ultra_fast_extraction_udf(keywords)
         print("✅ Ultra-fast UDF with in-memory keyword matching created")
         
-        # Configure Kafka stream
+        # Configure Kafka stream for REAL-TIME TRENDS (skip old messages)
         kafka_stream = spark \
             .readStream \
             .format("kafka") \
@@ -348,7 +350,11 @@ def main():
             .option("subscribe", "github-events-raw") \
             .option("startingOffsets", "latest") \
             .option("failOnDataLoss", "false") \
-            .option("maxOffsetsPerTrigger", "50") \
+            .option("maxOffsetsPerTrigger", "100") \
+            .option("kafka.consumer.group.id", "github-realtime-trends") \
+            .option("kafka.consumer.auto.offset.reset", "latest") \
+            .option("kafka.consumer.enable.auto.commit", "false") \
+            .option("kafka.consumer.session.timeout.ms", "10000") \
             .load()
         
         # Define GitHub event schema
@@ -375,18 +381,20 @@ def main():
                 current_timestamp().alias("processing_time")
             )
         
-        print("\n💾 Starting ultra-fast streaming write...")
-        print("⏰ Micro-batches every 5 seconds")
-        print("🚀 Single table write for maximum speed")
+        print("\n💾 Starting REAL-TIME TRENDS streaming...")
+        print("⏰ Micro-batches every 5 seconds (30s rolling window)")
+        print("🚀 Latest messages only - skips old data")
+        print("🎯 Optimized for real-time dashboard updates")
         print("-" * 60)
         
-        # Start streaming query
+        # Start streaming query for REAL-TIME TRENDS
         streaming_query = processed_stream \
             .writeStream \
             .foreachBatch(write_to_streaming_delta) \
             .outputMode("append") \
             .trigger(processingTime='5 seconds') \
-            .option("checkpointLocation", "/tmp/spark-streaming-checkpoint/github-consumer") \
+            .option("checkpointLocation", "/tmp/spark-streaming-checkpoint/github-realtime") \
+            .queryName("github-realtime-trends") \
             .start()
         
         print("✅ Ultra-fast streaming query started!")
