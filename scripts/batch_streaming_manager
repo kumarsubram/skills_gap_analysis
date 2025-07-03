@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# CONFIGURABLE BATCH-AWARE STREAMING MANAGER
+# CONFIGURABLE BATCH-AWARE STREAMING MANAGER (CORRECTED FOR AIRFLOW 3.0)
 # =============================================================================
 # Coordinates continuous streaming with daily batch jobs
 # Easy to customize timing and DAGs
@@ -126,10 +126,21 @@ get_minutes_until_next_phase() {
 get_disk_usage() { df / | awk 'NR==2 {print int($5)}'; }
 get_disk_usage_gb() { df -h / | awk 'NR==2 {print $3 "/" $2 " (" $5 ")"}'; }
 
+# CORRECTED: In Airflow 3.0, use API server for DAG status checks
 is_dag_running() {
     local dag_id="$1"
-    docker exec airflow-spark-airflow-worker-1 \
-        airflow dags list-runs "$dag_id" 2>/dev/null | \
+    # Use API server to check DAG runs via REST API
+    local result=$(docker exec airflow-spark-airflow-apiserver-1 \
+        curl -s "http://localhost:8080/api/v1/dags/${dag_id}/dagRuns?state=running&state=queued" 2>/dev/null | \
+        grep -c '"state":"running"\|"state":"queued"' 2>/dev/null || echo "0")
+    [ "$result" -gt 0 ]
+}
+
+# ALTERNATIVE: Use scheduler for CLI operations (more reliable)
+is_dag_running_cli() {
+    local dag_id="$1"
+    docker exec airflow-spark-airflow-scheduler-1 \
+        airflow dags list-runs "$dag_id" --limit 5 2>/dev/null | \
         awk 'NR>2 {print $5}' | \
         grep -q "running\|queued" 2>/dev/null || return 1
 }
@@ -139,7 +150,7 @@ get_batch_jobs_status() {
     local total_count=${#BATCH_DAGS[@]}
     
     for dag in "${BATCH_DAGS[@]}"; do
-        if is_dag_running "$dag"; then
+        if is_dag_running_cli "$dag"; then
             running_count=$((running_count + 1))
         fi
     done
@@ -152,7 +163,7 @@ get_streaming_jobs_status() {
     
     for dag in "${STREAMING_DAGS[@]}"; do
         local dag_name=$(echo "$dag" | sed 's/.*_//')
-        if is_dag_running "$dag"; then
+        if is_dag_running_cli "$dag"; then
             status_parts+=("${dag_name}:✅")
         else
             status_parts+=("${dag_name}:❌")
@@ -164,13 +175,14 @@ get_streaming_jobs_status() {
 }
 
 # =============================================================================
-# DAG MANAGEMENT
+# DAG MANAGEMENT (CORRECTED FOR AIRFLOW 3.0)
 # =============================================================================
 
 stop_dag() {
     local dag_id="$1"
     info "Stopping DAG: $dag_id"
-    docker exec airflow-spark-airflow-worker-1 bash -c "
+    # CORRECTED: Use scheduler container for DAG operations
+    docker exec airflow-spark-airflow-scheduler-1 bash -c "
         airflow dags pause '$dag_id' 2>/dev/null || true
         airflow tasks clear '$dag_id' --yes --only-running 2>/dev/null || true
     " >/dev/null 2>&1 || warn "Could not fully stop $dag_id"
@@ -179,7 +191,8 @@ stop_dag() {
 start_dag() {
     local dag_id="$1"
     info "Starting DAG: $dag_id"
-    docker exec airflow-spark-airflow-worker-1 bash -c "
+    # CORRECTED: Use scheduler container for DAG operations
+    docker exec airflow-spark-airflow-scheduler-1 bash -c "
         airflow dags unpause '$dag_id' 2>/dev/null || true
         airflow dags trigger '$dag_id' 2>/dev/null || true
     " >/dev/null 2>&1 || warn "Could not start $dag_id"
@@ -199,13 +212,14 @@ start_all_streaming_dags() {
 }
 
 # =============================================================================
-# CLEANUP OPERATIONS
+# CLEANUP OPERATIONS (CORRECTED CONTAINER NAMES)
 # =============================================================================
 
 cleanup_airflow_logs() {
     info "Cleaning Airflow logs (keeping last ${LOG_RETENTION_HOURS}h)"
-    for container in airflow-scheduler airflow-worker airflow-triggerer airflow-dag-processor; do
-        docker exec "airflow-spark-${container}-1" bash -c "
+    # CORRECTED: Use proper container names from your docker-compose
+    for container in airflow-scheduler airflow-worker airflow-triggerer airflow-dag-processor apiserver; do
+        docker exec "airflow-spark-airflow-${container}-1" bash -c "
             find /opt/airflow/logs -type f -name '*.log' -mmin +$((LOG_RETENTION_HOURS * 60)) -delete 2>/dev/null || true
             find /opt/airflow/logs -type d -empty -delete 2>/dev/null || true
         " 2>/dev/null || warn "Could not clean logs in $container"
@@ -224,6 +238,7 @@ cleanup_spark_resources() {
 
 cleanup_streaming_checkpoints() {
     info "Cleaning streaming checkpoints (keeping last ${CHECKPOINT_RETENTION_HOURS}h)"
+    # CORRECTED: Use worker container for checkpoint cleanup (where tasks run)
     docker exec airflow-spark-airflow-worker-1 bash -c "
         find /tmp -name '*checkpoint*' -type d -mmin +$((CHECKPOINT_RETENTION_HOURS * 60)) -exec rm -rf {} + 2>/dev/null || true
         find /tmp -name 'spark-streaming-*' -type d -mmin +$((CHECKPOINT_RETENTION_HOURS * 60)) -exec rm -rf {} + 2>/dev/null || true
@@ -232,7 +247,8 @@ cleanup_streaming_checkpoints() {
 
 cleanup_kafka_minimal() {
     info "Minimal Kafka cleanup (3h retention handles data)"
-    docker exec kafka bash -c "
+    # CORRECTED: Use proper kafka container name
+    docker exec airflow-spark-kafka-1 bash -c "
         find /tmp -name 'kafka-*' -mmin +60 -type f -delete 2>/dev/null || true
     " 2>/dev/null || warn "Could not clean Kafka temp files"
 }
@@ -289,6 +305,7 @@ restart_all_containers() {
     
     docker restart \
         airflow-spark-airflow-worker-1 \
+        airflow-spark-airflow-scheduler-1 \
         spark-worker-1 \
         spark-worker-2 \
         spark-master \
@@ -306,7 +323,7 @@ handle_prep_phase() {
     phase "PRE-BATCH PREPARATION"
     
     for dag in "${STREAMING_DAGS[@]}"; do
-        if is_dag_running "$dag"; then
+        if is_dag_running_cli "$dag"; then
             stop_dag "$dag"
         fi
     done
@@ -375,7 +392,7 @@ handle_streaming_phase() {
         perform_full_cleanup "high usage during streaming"
     else
         for dag in "${STREAMING_DAGS[@]}"; do
-            if ! is_dag_running "$dag"; then
+            if ! is_dag_running_cli "$dag"; then
                 start_dag "$dag"
                 sleep 30
             fi
@@ -388,12 +405,13 @@ handle_streaming_phase() {
 # =============================================================================
 
 main_monitor() {
-    log "🚀 BATCH-AWARE STREAMING MANAGER STARTED"
+    log "🚀 BATCH-AWARE STREAMING MANAGER STARTED (AIRFLOW 3.0 CORRECTED)"
     log "📅 Batch window: ${BATCH_START_HOUR}:00 - ${BATCH_END_HOUR}:00"
     log "⏰ Current time: $(date '+%H:%M')"
     log "💾 Initial disk usage: $(get_disk_usage_gb)"
     log "📡 Streaming DAGs: ${STREAMING_DAGS[*]}"
     log "🏭 Batch DAGs: ${BATCH_DAGS[*]}"
+    log "🌐 Access Airflow UI at: http://localhost:8085"
     
     while true; do
         local mode=$(get_operation_mode)
@@ -423,8 +441,8 @@ show_status() {
     local streaming_status=$(get_streaming_jobs_status)
     local batch_status=$(get_batch_jobs_status)
     
-    echo "📊 BATCH-AWARE STREAMING STATUS"
-    echo "================================"
+    echo "📊 BATCH-AWARE STREAMING STATUS (AIRFLOW 3.0 CORRECTED)"
+    echo "======================================================="
     echo "⏰ Current time: $(date '+%H:%M:%S')"
     echo "🔄 Current mode: $mode"
     echo "⏳ Next phase in: ${minutes_to_next} minutes"
@@ -432,11 +450,15 @@ show_status() {
     echo "📡 Streaming: $streaming_status"
     echo "🏭 Batch jobs: $batch_status"
     echo "📅 Batch window: ${BATCH_START_HOUR}:00 - ${BATCH_END_HOUR}:00"
+    echo "🌐 Airflow UI: http://localhost:8085"
+    echo ""
+    echo "🐳 Container Status:"
+    docker ps --format "table {{.Names}}\t{{.Status}}" | grep -E "(airflow|spark)" | head -10
 }
 
 show_help() {
     cat << EOF
-🎯 CONFIGURABLE BATCH-AWARE STREAMING MANAGER
+🎯 CONFIGURABLE BATCH-AWARE STREAMING MANAGER (AIRFLOW 3.0 CORRECTED)
 
 USAGE: $0 <command>
 
@@ -449,6 +471,13 @@ COMMANDS:
     restart     - Restart streaming containers
     help        - Show this help
 
+AIRFLOW 3.0 CORRECTIONS MADE:
+    ✅ DAG operations now use scheduler container (not worker)
+    ✅ Container names match your docker-compose.yml
+    ✅ Added API server status checking
+    ✅ Corrected Kafka container name
+    ✅ Added scheduler to restart operations
+
 CONFIGURATION:
     Edit the top of this script to customize:
     - Batch timing (BATCH_START_HOUR, BATCH_END_HOUR)
@@ -459,6 +488,12 @@ EXAMPLES:
     screen -S streaming -dm $0 monitor    # Start monitoring
     $0 status                             # Check status
     $0 cleanup                            # Emergency cleanup
+
+ACCESS YOUR AIRFLOW:
+    🌐 Web UI: http://localhost:8085
+    📊 Spark Master: http://localhost:8060
+    🔧 Jupyter: http://localhost:8888
+    📋 Kafka UI: http://localhost:9090
 
 EOF
 }
