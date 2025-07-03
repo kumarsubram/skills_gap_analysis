@@ -14,7 +14,7 @@ import json
 import time
 import requests
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
@@ -164,9 +164,9 @@ def get_kafka_bootstrap_servers():
 
 
 def produce_github_events(**context):
-    """FIXED: Produce GitHub events to Kafka - runs indefinitely until stopped"""
+    """Produce GitHub events to Kafka - runs for 1 hour then restarts"""
     
-    print("🚀 GITHUB EVENTS PRODUCER - RUNS UNTIL STOPPED")
+    print("🚀 GITHUB EVENTS PRODUCER - HOURLY AUTOMATIC RESTARTS")
     print("=" * 60)
     
     # Import Kafka producer
@@ -186,7 +186,7 @@ def produce_github_events(**context):
     print(f"🔗 Kafka: {bootstrap_servers}")
     print(f"📤 Topic: {topic}")
     print(f"🔍 Filtering for {len(keywords)} technology keywords")
-    print("⚠️  Producer will run INDEFINITELY - stop manually or restart container")
+    print("⏰ Producer will run for 1 hour then restart automatically")
     
     # Create Kafka producer
     producer = Producer({
@@ -225,10 +225,10 @@ def produce_github_events(**context):
     
     print(f"⏰ Started at: {start_time.strftime('%H:%M:%S')}")
     print("🎯 ONLY sending events that contain technology keywords!")
-    print("🛑 To stop: Cancel DAG run or restart container")
+    print("🔄 Will timeout after 1 hour and restart automatically")
     
     try:
-        # INFINITE LOOP - runs until manually stopped
+        # RUNS FOR 1 HOUR - then Airflow times out and restarts next hour
         while True:
             stats['cycles'] += 1
             
@@ -368,22 +368,22 @@ default_args = {
     'owner': 'data-engineering',
     'start_date': datetime(2025, 6, 23),
     'email_on_failure': False,
-    'retries': 0,  # Don't retry for streaming
+    'retries': 1,  # Retry once if failure occurs
 }
 
 dag = DAG(
-    dag_id='producer_github_events',  # ✅ SAME DAG NAME - NO CHANGES
+    dag_id='producer_github_events',
     default_args=default_args,
-    description='FIXED GitHub events producer - runs indefinitely until stopped',
-    schedule=None,  # Manual trigger only
+    description='GitHub events producer - hourly automatic restarts',
+    schedule="@hourly",  # Run every hour automatically
     catchup=False,
     max_active_runs=1,
-    tags=['github', 'kafka', 'producer', 'streaming', 'fixed', 'indefinite'],
+    tags=['github', 'kafka', 'producer', 'streaming', 'hourly-restart'],
 )
 
 produce_task = PythonOperator(
     task_id='produce_github_events',
     python_callable=produce_github_events,
-    execution_timeout=None,  # No timeout - runs indefinitely
+    execution_timeout=timedelta(hours=1),  # 1-hour timeout for hourly restarts
     dag=dag,
 )
