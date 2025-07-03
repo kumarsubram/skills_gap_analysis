@@ -29,16 +29,16 @@ from airflow.operators.python import PythonOperator
 
 def start_streaming_consumer(**context):
     """
-    Real-time trends consumer - FRESH RESTART EVERY HOUR
+    Real-time trends consumer - AUTOMATIC HOURLY RESTART
     Always starts with latest messages for 30-second rolling dashboard
     """
     
-    print("🎯 REAL-TIME TRENDS CONSUMER (HOURLY RESTART)")
+    print("🎯 REAL-TIME TRENDS CONSUMER (AIRFLOW SCHEDULED)")
     print("=" * 60)
     print("📡 Source: github-events-raw (latest messages only)")
     print("💾 Target: bronze_github_streaming_keyword_extractions")
     print("🎯 Purpose: 30-second rolling dashboard updates")
-    print("⏰ Runtime: 1 hour max (auto-restart for freshness)")
+    print("⏰ Runtime: 1 hour max (auto-restart by Airflow)")
     print("🔄 Strategy: Skip old messages, always start fresh")
     
     # Step 1: Prerequisites check
@@ -51,144 +51,128 @@ def start_streaming_consumer(**context):
         # For script-managed tasks, raise exception to indicate failure
         raise RuntimeError("Prerequisites check failed - script should retry")
     
-    # Step 2: Run streaming job until externally stopped
+    # Step 2: Run streaming job for 1 hour
     print("\n" + "="*40)
-    print("STEP 2: SCRIPT-MANAGED STREAMING")
+    print("STEP 2: AIRFLOW-MANAGED STREAMING")
     print("="*40)
-    print("💡 Your script will stop this when needed for:")
-    print("   • Batch processing preparation")
-    print("   • High disk usage cleanup")
-    print("   • Container restarts")
-    print("   • Scheduled maintenance")
+    print("💡 Airflow will automatically:")
+    print("   • Run this DAG every hour")
+    print("   • Stop after 1 hour timeout")
+    print("   • Start fresh next hour")
+    print("   • Handle failures automatically")
     
     job_script = "/opt/airflow/include/spark_jobs/github_kafka_to_streaming_delta.py"
     
     try:
-        # Run for 1 hour max - auto-restart for real-time freshness
+        # Run for 1 hour max - auto-restart by Airflow next hour
         print("🔄 Running for 1 hour max to ensure fresh real-time data")
         result = run_streaming_job(job_script, timeout_minutes=60)
         
         # Expected completion after 1 hour
         print("\n" + "="*40)
-        print("STEP 3: HOURLY RESTART (EXPECTED)")
+        print("STEP 3: HOURLY COMPLETION (EXPECTED)")
         print("="*40)
         
         if result.get('success', False):
-            print("🔄 HOURLY RESTART COMPLETED SUCCESSFULLY")
+            print("🔄 HOURLY RUN COMPLETED SUCCESSFULLY")
             print(f"✅ {result.get('message', 'Completed after 1 hour')}")
             print(f"📊 Runtime: {result.get('runtime_minutes', 0):.1f} minutes")
-            print("💡 Script will restart for fresh real-time data")
+            print("💡 Airflow will start next run at top of hour")
             return result
         else:
             print("❌ STREAMING FAILED DURING HOUR")
             print(f"💥 {result.get('message', 'Unknown error')}")
-            # Raise exception so script knows to restart/investigate
+            # Raise exception so Airflow knows there was a failure
             raise RuntimeError(f"Streaming failed: {result.get('message', 'Unknown error')}")
             
     except KeyboardInterrupt:
-        print("\n🛑 STREAMING STOPPED BY SCRIPT")
-        print("✅ This is normal - script-managed shutdown or hourly restart")
-        # Don't raise exception for script-managed stops
+        print("\n🛑 STREAMING STOPPED MANUALLY")
+        print("✅ This is normal - manual stop or container restart")
+        # Don't raise exception for manual stops
         return {
-            'status': 'stopped_by_script',
+            'status': 'stopped_manually',
             'success': True,
-            'message': 'Stopped by external script (normal operation)'
+            'message': 'Stopped manually (normal operation)'
         }
     except Exception as e:
         print(f"\n❌ STREAMING ERROR: {e}")
-        print("🔧 Script should investigate and potentially restart")
-        # Re-raise so script knows there was a problem
+        print("🔧 Airflow will retry based on DAG retry settings")
+        # Re-raise so Airflow knows there was a problem
         raise
 
 
 def ensure_streaming_table_only(**context):
     """
-    Ensure streaming table exists - called by script before starting streaming
+    Ensure streaming table exists - called before starting streaming
     """
-    print("🔍 STREAMING TABLE SETUP (SCRIPT-MANAGED)")
+    print("🔍 STREAMING TABLE SETUP (AIRFLOW-MANAGED)")
     print("=" * 50)
     
     success = ensure_streaming_table_exists()
     
     if success:
-        print("✅ Streaming table ready for script-managed processing!")
+        print("✅ Streaming table ready for processing!")
         return {'status': 'success', 'streaming_table': success}
     else:
         print("❌ Streaming table setup failed")
-        # Raise exception so script knows setup failed
+        # Raise exception so Airflow knows setup failed
         raise RuntimeError("Failed to setup streaming table")
 
 
-# DAG Definition - MANUAL TRIGGER ONLY (Script Controlled)
+# DAG Definition - HOURLY SCHEDULED
 default_args = {
     "owner": "data-engineering",
     "start_date": datetime(2025, 6, 23, tzinfo=timezone.utc),
-    "retries": 0,  # No retries - let script handle restarts
+    "retries": 1,  # Retry once if failure occurs
     "retry_delay": timedelta(minutes=5),
     "email_on_failure": False,
     "email_on_retry": False,
 }
 
 dag = DAG(
-    dag_id="consumer_github_events",  # SAME DAG NAME
+    dag_id="consumer_github_events",
     default_args=default_args,
-    description="Real-time GitHub Trends Consumer - Hourly fresh restarts for latest data",
-    schedule=None,  # NO SCHEDULE - Script controls when this runs
+    description="Real-time GitHub Trends Consumer - Hourly automatic restarts for latest data",
+    schedule="@hourly",  # Run every hour automatically
     catchup=False,
     max_active_runs=1,  # Only one consumer at a time
     max_active_tasks=1,
     tags=["github", "streaming", "consumer", "real-time", "hourly-restart", "latest-only"],
     doc_md="""
-    # GitHub Events Streaming Consumer - SCRIPT-MANAGED
+    # GitHub Events Streaming Consumer - HOURLY SCHEDULED
     
     ## 🎯 **Purpose**
-    Consumes GitHub events from Kafka - controlled by external batch-aware streaming manager script.
+    Consumes GitHub events from Kafka with automatic hourly restarts for fresh real-time data.
     
-    ## 🤖 **External Script Control**
-    This DAG is managed by your `batch_streaming_manager.sh` script:
-    - ✅ **Script starts**: `airflow dags trigger consumer_github_events`
-    - ✅ **Script stops**: `airflow tasks clear consumer_github_events --only-running`
-    - ✅ **Script monitors**: Checks if DAG is running with `airflow dags list-runs`
-    - ✅ **Script coordinates**: Stops before batch, restarts after recovery
+    ## ⏰ **Automatic Scheduling**
+    This DAG runs automatically every hour:
+    - ✅ **Hourly schedule**: Runs at :00 minutes every hour
+    - ✅ **1-hour timeout**: Each run lasts max 1 hour then gracefully stops
+    - ✅ **Fresh restarts**: Always starts from latest Kafka messages
+    - ✅ **No manual triggers**: Fully automated operation
     
-    ## 🔄 **Operation Phases**
-    Your script manages these phases:
-    1. **Streaming Mode**: This DAG runs continuously
-    2. **Prep Phase**: Script stops this DAG 30min before batch
-    3. **Batch Phase**: This DAG is stopped, batch jobs run
-    4. **Recovery Phase**: Script restarts containers and this DAG
+    ## 🔄 **Operation Flow**
+    1. **Start**: DAG triggers every hour automatically
+    2. **Run**: Processes Kafka messages for up to 1 hour
+    3. **Timeout**: Gracefully stops after 1 hour
+    4. **Restart**: Next hourly run starts fresh with latest data
     
-    ## 🚀 **Integration Benefits**
-    - ✅ **Resource coordination**: Script ensures batch jobs get full resources
-    - ✅ **Disk management**: Script stops streaming when disk usage high
-    - ✅ **Clean restarts**: Script restarts containers between phases
-    - ✅ **Monitoring**: Script tracks streaming status and health
+    ## 🚀 **Benefits**
+    - ✅ **Always fresh data**: Hourly restarts ensure latest messages
+    - ✅ **No external dependencies**: Pure Airflow scheduling
+    - ✅ **Resource management**: 1-hour limit prevents memory buildup
+    - ✅ **Reliability**: Automatic recovery from failures
     
-    ## 📊 **Script Configuration**
-    Your script controls:
-    - **Batch timing**: When to stop/start streaming
-    - **Disk thresholds**: When to stop for cleanup
-    - **Restart logic**: How to recover from failures
-    - **Health monitoring**: Continuous status checks
+    ## 📊 **Real-time Dashboard**
+    Perfect for 30-second rolling dashboards:
+    - Latest GitHub events processed within seconds
+    - No lag from old messages
+    - Consistent fresh data flow
     
     ## 🛑 **Manual Control**
-    While script is running:
-    - **Monitor script**: `./batch_streaming_manager.sh status`
-    - **Emergency stop**: `./batch_streaming_manager.sh stop`
-    - **Manual cleanup**: `./batch_streaming_manager.sh cleanup`
-    - **Restart streaming**: `./batch_streaming_manager.sh start`
-    
-    ## 💡 **Why This Approach Works**
-    - **External orchestration**: Script handles complex coordination
-    - **Airflow for execution**: DAGs focus on data processing
-    - **Resource management**: Script prevents resource conflicts
-    - **Operational simplicity**: One script controls everything
-    
-    ## 🎯 **Usage Pattern**
-    1. Start script: `screen -S streaming -dm ./batch_streaming_manager.sh monitor`
-    2. Script automatically triggers this DAG during streaming phases
-    3. Script stops this DAG during batch phases
-    4. Monitor with: `./batch_streaming_manager.sh status`
+    - **Pause**: `airflow dags pause consumer_github_events`
+    - **Unpause**: `airflow dags unpause consumer_github_events`
+    - **Manual trigger**: `airflow dags trigger consumer_github_events`
     """,
 )
 
