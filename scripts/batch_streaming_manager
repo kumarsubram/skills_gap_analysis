@@ -1,82 +1,117 @@
 #!/bin/bash
 # =============================================================================
-# CONFIGURABLE BATCH-AWARE STREAMING MANAGER (CORRECTED FOR AIRFLOW 3.0)
+# AIRFLOW 3.0 BATCH-AWARE STREAMING MANAGER
 # =============================================================================
-# Coordinates continuous streaming with daily batch jobs
-# Easy to customize timing and DAGs
+# 
+# CRITICAL AIRFLOW 3.0 NOTES (to prevent future confusion):
+# 
+# 1. API ENDPOINTS - Airflow 3.0 uses FastAPI-based REST API v2:
+#    ✅ CORRECT: /api/v2/dags/{dag_id}/dag-runs (hyphen, not camelCase)
+#    ❌ WRONG:   /api/v1/dags/{dag_id}/dagRuns (old v1, deprecated)
+#    ❌ WRONG:   /api/experimental/* (completely removed)
+#
+# 2. CLI COMMANDS - Airflow 3.0 requires automation flags:
+#    ✅ CORRECT: airflow dags pause dag_id -y (with -y for scripts)
+#    ❌ WRONG:   airflow dags pause dag_id (will prompt interactively)
+#
+# 3. AUTHENTICATION - Basic auth required for API calls:
+#    ✅ CORRECT: curl -u "$AIRFLOW_USER:$AIRFLOW_PASS" (from env vars)
+#    ❌ WRONG:   Hardcoded credentials in script
+#
+# 4. DAG REQUIREMENTS - For external trigger control:
+#    ✅ REQUIRED: schedule=None in DAG definition
+#    ❌ WRONG:    schedule_interval='@daily' (causes scheduling conflicts)
+#
+# 5. SAFETY PATTERNS - Prevent queue overflow:
+#    ✅ REQUIRED: Check running/queued state before trigger
+#    ✅ REQUIRED: Implement trigger cooldowns (300s minimum)
+#    ✅ REQUIRED: Validate DAG exists before operations
+#
+# =============================================================================
 
-set -e
+set -euo pipefail
 
 # =============================================================================
-# 🔧 EASY CONFIGURATION - CUSTOMIZE THESE VALUES
+# CONFIGURATION
 # =============================================================================
 
-# BATCH JOB SCHEDULE (24-hour format)
-BATCH_START_HOUR=13              # When batch jobs start (1 PM = 13)
-BATCH_END_HOUR=17                # When batch jobs end (5 PM = 17)
-PREP_MINUTES=30                  # Prep time before batch (30 minutes)
-RECOVERY_MINUTES=30              # Recovery time after batch (30 minutes)
+# Batch Job Schedule (24-hour format)
+BATCH_START_HOUR=13
+BATCH_END_HOUR=17
+PREP_MINUTES=30
+RECOVERY_MINUTES=30
 
-# STREAMING DAG NAMES (add more as needed)
+# DAG Lists - REQUIREMENT: All streaming DAGs MUST have schedule=None
 STREAMING_DAGS=(
     "producer_github_events"
     "consumer_github_events"
 )
 
-# BATCH DAG NAMES (add more as needed)
 BATCH_DAGS=(
     "daily_github_bronze"
     "daily_github_processing_analytics"
     "daily_jobs_bronze"
 )
 
-# DISK SPACE THRESHOLDS (percentages)
-STREAMING_CLEANUP_AT=60          # Start cleanup during streaming
-STREAMING_STOP_AT=75             # Emergency stop during streaming
-BATCH_CLEANUP_AT=50              # Start cleanup during batch (more aggressive)
-BATCH_STOP_AT=70                 # Emergency stop during batch (more aggressive)
+# System Thresholds
+DISK_CLEANUP_AT=60
+DISK_EMERGENCY_AT=75
+BATCH_DISK_CLEANUP=50
+BATCH_DISK_EMERGENCY=70
 
-# MONITORING INTERVALS (seconds)
-STREAMING_CHECK_INTERVAL=300     # Check every 5 minutes during streaming
-BATCH_CHECK_INTERVAL=1800        # Check every 30 minutes during batch
-PREP_RECOVERY_INTERVAL=60        # Check every 1 minute during prep/recovery
+# Monitoring Intervals (seconds)
+STREAMING_CHECK=300
+BATCH_CHECK=1800
+TRANSITION_CHECK=60
 
-# CLEANUP RETENTION (hours)
-LOG_RETENTION_HOURS=2            # Keep logs for 2 hours
-CHECKPOINT_RETENTION_HOURS=1     # Keep checkpoints for 1 hour
+# Safety Settings
+TRIGGER_COOLDOWN=300
+MAX_QUEUED_RUNS=2
+SAFE_MODE=true
 
 # =============================================================================
-# SYSTEM SETUP (don't change unless you know what you're doing)
+# SYSTEM SETUP
 # =============================================================================
 
-LOG_FILE="/tmp/batch_streaming.log"
-COLORS=true
+LOG_FILE="/tmp/batch_streaming_$(date +%Y%m%d).log"
+TRIGGER_FILE="/tmp/dag_triggers"
 
 # Colors
-if [ "$COLORS" = true ]; then
-    RED='\033[0;31m'
-    GREEN='\033[0;32m'
-    YELLOW='\033[1;33m'
-    BLUE='\033[0;34m'
-    PURPLE='\033[0;35m'
-    NC='\033[0m'
-else
-    RED='' GREEN='' YELLOW='' BLUE='' PURPLE='' NC=''
-fi
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+NC='\033[0m'
 
 # Logging functions
-log() { echo -e "${GREEN}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $1" | tee -a "$LOG_FILE"; }
-warn() { echo -e "${YELLOW}[$(date '+%Y-%m-%d %H:%M:%S')] ⚠️${NC}  $1" | tee -a "$LOG_FILE"; }
-error() { echo -e "${RED}[$(date '+%Y-%m-%d %H:%M:%S')] ❌${NC} $1" | tee -a "$LOG_FILE"; }
-info() { echo -e "${BLUE}[$(date '+%Y-%m-%d %H:%M:%S')] ℹ️${NC}  $1" | tee -a "$LOG_FILE"; }
-phase() { echo -e "${PURPLE}[$(date '+%Y-%m-%d %H:%M:%S')] 🔄${NC} $1" | tee -a "$LOG_FILE"; }
+log() { echo -e "${GREEN}[$(date '+%H:%M:%S')]${NC} $1" | tee -a "$LOG_FILE"; }
+warn() { echo -e "${YELLOW}[$(date '+%H:%M:%S')] ⚠️${NC} $1" | tee -a "$LOG_FILE"; }
+error() { echo -e "${RED}[$(date '+%H:%M:%S')] ❌${NC} $1" | tee -a "$LOG_FILE"; }
+info() { echo -e "${BLUE}[$(date '+%H:%M:%S')] ℹ️${NC} $1" | tee -a "$LOG_FILE"; }
+phase() { echo -e "${PURPLE}[$(date '+%H:%M:%S')] 🔄${NC} $1" | tee -a "$LOG_FILE"; }
 
 # =============================================================================
-# TIME AND PHASE DETECTION
+# AUTHENTICATION (SECURE)
+# =============================================================================
+
+# SECURITY: Never hardcode credentials - use environment variables
+get_auth_header() {
+    if [ -z "${AIRFLOW_USER:-}" ] || [ -z "${AIRFLOW_PASS:-}" ]; then
+        error "AIRFLOW_USER and AIRFLOW_PASS environment variables required"
+        echo "Example: export AIRFLOW_USER=admin && export AIRFLOW_PASS=yourpassword"
+        exit 1
+    fi
+    echo "${AIRFLOW_USER}:${AIRFLOW_PASS}"
+}
+
+# =============================================================================
+# TIME MANAGEMENT
 # =============================================================================
 
 get_current_hour() { date +%H | sed 's/^0*//'; }
 get_current_minute() { date +%M | sed 's/^0*//'; }
+
 get_current_time_minutes() {
     local hour=$(get_current_hour)
     local minute=$(get_current_minute)
@@ -85,16 +120,16 @@ get_current_time_minutes() {
 
 get_operation_mode() {
     local current_minutes=$(get_current_time_minutes)
-    local prep_start_minutes=$(((BATCH_START_HOUR * 60) - PREP_MINUTES))
-    local batch_start_minutes=$((BATCH_START_HOUR * 60))
-    local batch_end_minutes=$((BATCH_END_HOUR * 60))
-    local recovery_end_minutes=$((batch_end_minutes + RECOVERY_MINUTES))
+    local prep_start=$((BATCH_START_HOUR * 60 - PREP_MINUTES))
+    local batch_start=$((BATCH_START_HOUR * 60))
+    local batch_end=$((BATCH_END_HOUR * 60))
+    local recovery_end=$((batch_end + RECOVERY_MINUTES))
     
-    if [ $current_minutes -ge $prep_start_minutes ] && [ $current_minutes -lt $batch_start_minutes ]; then
+    if [ $current_minutes -ge $prep_start ] && [ $current_minutes -lt $batch_start ]; then
         echo "prep"
-    elif [ $current_minutes -ge $batch_start_minutes ] && [ $current_minutes -lt $batch_end_minutes ]; then
+    elif [ $current_minutes -ge $batch_start ] && [ $current_minutes -lt $batch_end ]; then
         echo "batch"
-    elif [ $current_minutes -ge $batch_end_minutes ] && [ $current_minutes -lt $recovery_end_minutes ]; then
+    elif [ $current_minutes -ge $batch_end ] && [ $current_minutes -lt $recovery_end ]; then
         echo "recovery"
     else
         echo "streaming"
@@ -110,7 +145,7 @@ get_minutes_until_next_phase() {
         batch) echo $((BATCH_END_HOUR * 60 - current_minutes)) ;;
         recovery) echo $(((BATCH_END_HOUR * 60 + RECOVERY_MINUTES) - current_minutes)) ;;
         streaming)
-            local next_prep=$(((BATCH_START_HOUR * 60) - PREP_MINUTES))
+            local next_prep=$((BATCH_START_HOUR * 60 - PREP_MINUTES))
             if [ $current_minutes -lt $next_prep ]; then
                 echo $((next_prep - current_minutes))
             else
@@ -126,101 +161,190 @@ get_minutes_until_next_phase() {
 get_disk_usage() { df / | awk 'NR==2 {print int($5)}'; }
 get_disk_usage_gb() { df -h / | awk 'NR==2 {print $3 "/" $2 " (" $5 ")"}'; }
 
-# CORRECTED: In Airflow 3.0, use API server for DAG status checks
+# AIRFLOW 3.0 API: Use correct v2 endpoint with hyphenated URL
 is_dag_running() {
     local dag_id="$1"
-    # Use API server to check DAG runs via REST API
+    local auth=$(get_auth_header)
+    
+    # CRITICAL: /api/v2/dags/{dag_id}/dag-runs (note the hyphen!)
     local result=$(docker exec airflow-spark-airflow-apiserver-1 \
-        curl -s "http://localhost:8080/api/v1/dags/${dag_id}/dagRuns?state=running&state=queued" 2>/dev/null | \
+        curl -s -u "$auth" "http://localhost:8080/api/v2/dags/${dag_id}/dag-runs?dag_run_state=running&dag_run_state=queued" 2>/dev/null | \
         grep -c '"state":"running"\|"state":"queued"' 2>/dev/null || echo "0")
     [ "$result" -gt 0 ]
 }
 
-# ALTERNATIVE: Use scheduler for CLI operations (more reliable)
+# AIRFLOW 3.0 CLI: More reliable than API for complex queries
 is_dag_running_cli() {
     local dag_id="$1"
     docker exec airflow-spark-airflow-scheduler-1 \
-        airflow dags list-runs "$dag_id" --limit 5 2>/dev/null | \
-        awk 'NR>2 {print $5}' | \
+        airflow dags list-runs "$dag_id" 2>/dev/null | \
+        awk 'NR>2 {print $3}' | head -5 | \
         grep -q "running\|queued" 2>/dev/null || return 1
 }
 
-get_batch_jobs_status() {
-    local running_count=0
-    local total_count=${#BATCH_DAGS[@]}
-    
-    for dag in "${BATCH_DAGS[@]}"; do
-        if is_dag_running_cli "$dag"; then
-            running_count=$((running_count + 1))
-        fi
-    done
-    
-    echo "${running_count}/${total_count}"
+count_queued_runs() {
+    local dag_id="$1"
+    docker exec airflow-spark-airflow-scheduler-1 \
+        airflow dags list-runs "$dag_id" 2>/dev/null | \
+        awk 'NR>2 {print $3}' | \
+        grep -c "queued" 2>/dev/null || echo "0"
 }
 
-get_streaming_jobs_status() {
+get_streaming_status() {
     local status_parts=()
     
     for dag in "${STREAMING_DAGS[@]}"; do
-        local dag_name=$(echo "$dag" | sed 's/.*_//')
+        local short_name=$(echo "$dag" | sed 's/.*_//')
         if is_dag_running_cli "$dag"; then
-            status_parts+=("${dag_name}:✅")
+            status_parts+=("${short_name}:✅")
         else
-            status_parts+=("${dag_name}:❌")
+            status_parts+=("${short_name}:❌")
         fi
     done
     
-    local IFS=' '
     echo "${status_parts[*]}"
 }
 
-# =============================================================================
-# DAG MANAGEMENT (CORRECTED FOR AIRFLOW 3.0)
-# =============================================================================
-
-stop_dag() {
-    local dag_id="$1"
-    info "Stopping DAG: $dag_id"
-    # CORRECTED: Use scheduler container for DAG operations
-    docker exec airflow-spark-airflow-scheduler-1 bash -c "
-        airflow dags pause '$dag_id' 2>/dev/null || true
-        airflow tasks clear '$dag_id' --yes --only-running 2>/dev/null || true
-    " >/dev/null 2>&1 || warn "Could not fully stop $dag_id"
+get_batch_status() {
+    local running=0
+    local total=${#BATCH_DAGS[@]}
+    
+    for dag in "${BATCH_DAGS[@]}"; do
+        if is_dag_running_cli "$dag"; then
+            running=$((running + 1))
+        fi
+    done
+    
+    echo "${running}/${total}"
 }
 
-start_dag() {
+# =============================================================================
+# TRIGGER TRACKING (SAFETY)
+# =============================================================================
+
+get_last_trigger_time() {
     local dag_id="$1"
+    if [ -f "$TRIGGER_FILE" ]; then
+        grep "^${dag_id}:" "$TRIGGER_FILE" 2>/dev/null | cut -d: -f2 || echo "0"
+    else
+        echo "0"
+    fi
+}
+
+set_last_trigger_time() {
+    local dag_id="$1"
+    local timestamp=$(date +%s)
+    
+    touch "$TRIGGER_FILE"
+    grep -v "^${dag_id}:" "$TRIGGER_FILE" > "${TRIGGER_FILE}.tmp" 2>/dev/null || true
+    echo "${dag_id}:${timestamp}" >> "${TRIGGER_FILE}.tmp"
+    mv "${TRIGGER_FILE}.tmp" "$TRIGGER_FILE"
+}
+
+can_trigger_dag() {
+    local dag_id="$1"
+    local last_trigger=$(get_last_trigger_time "$dag_id")
+    local current_time=$(date +%s)
+    local time_diff=$((current_time - last_trigger))
+    
+    if [ $time_diff -lt $TRIGGER_COOLDOWN ]; then
+        warn "DAG $dag_id cooldown active (${time_diff}s < ${TRIGGER_COOLDOWN}s)"
+        return 1
+    fi
+    
+    return 0
+}
+
+# =============================================================================
+# DAG MANAGEMENT (AIRFLOW 3.0 COMPLIANT)
+# =============================================================================
+
+dag_exists() {
+    local dag_id="$1"
+    docker exec airflow-spark-airflow-scheduler-1 \
+        airflow dags details "$dag_id" >/dev/null 2>&1
+}
+
+# AIRFLOW 3.0: Safe DAG stopping with proper CLI flags
+stop_dag_safely() {
+    local dag_id="$1"
+    info "Stopping DAG: $dag_id"
+    
+    if ! dag_exists "$dag_id"; then
+        warn "DAG $dag_id does not exist"
+        return 1
+    fi
+    
+    # CRITICAL: Use -y flag for automation (no interactive prompts)
+    docker exec airflow-spark-airflow-scheduler-1 \
+        airflow dags pause "$dag_id" -y 2>/dev/null || warn "Could not pause $dag_id"
+    
+    # Clear only running tasks
+    docker exec airflow-spark-airflow-scheduler-1 \
+        airflow tasks clear "$dag_id" --yes --only-running 2>/dev/null || warn "Could not clear running tasks"
+}
+
+# AIRFLOW 3.0: Safe DAG starting with validation
+start_dag_safely() {
+    local dag_id="$1"
+    
+    if ! dag_exists "$dag_id"; then
+        error "DAG $dag_id does not exist - check deployment"
+        return 1
+    fi
+    
+    # Safety checks
+    if [ "$SAFE_MODE" = true ]; then
+        local queued=$(count_queued_runs "$dag_id")
+        if [ "$queued" -gt $MAX_QUEUED_RUNS ]; then
+            warn "DAG $dag_id has $queued queued runs (max: $MAX_QUEUED_RUNS)"
+            return 1
+        fi
+        
+        if ! can_trigger_dag "$dag_id"; then
+            return 1
+        fi
+    fi
+    
     info "Starting DAG: $dag_id"
-    # CORRECTED: Use scheduler container for DAG operations
-    docker exec airflow-spark-airflow-scheduler-1 bash -c "
-        airflow dags unpause '$dag_id' 2>/dev/null || true
-        airflow dags trigger '$dag_id' 2>/dev/null || true
-    " >/dev/null 2>&1 || warn "Could not start $dag_id"
+    
+    # Unpause with automation flag
+    docker exec airflow-spark-airflow-scheduler-1 \
+        airflow dags unpause "$dag_id" -y 2>/dev/null || warn "Could not unpause $dag_id"
+    
+    # Only trigger if not already running
+    if ! is_dag_running_cli "$dag_id"; then
+        docker exec airflow-spark-airflow-scheduler-1 \
+            airflow dags trigger "$dag_id" 2>/dev/null && \
+            set_last_trigger_time "$dag_id" || \
+            warn "Could not trigger $dag_id"
+    else
+        info "DAG $dag_id already running/queued"
+    fi
 }
 
 stop_all_streaming_dags() {
     for dag in "${STREAMING_DAGS[@]}"; do
-        stop_dag "$dag"
+        stop_dag_safely "$dag"
     done
 }
 
 start_all_streaming_dags() {
     for dag in "${STREAMING_DAGS[@]}"; do
-        start_dag "$dag"
-        sleep 30
+        start_dag_safely "$dag"
+        sleep 30  # Prevent overwhelming scheduler
     done
 }
 
 # =============================================================================
-# CLEANUP OPERATIONS (CORRECTED CONTAINER NAMES)
+# CLEANUP OPERATIONS
 # =============================================================================
 
 cleanup_airflow_logs() {
-    info "Cleaning Airflow logs (keeping last ${LOG_RETENTION_HOURS}h)"
-    # CORRECTED: Use proper container names from your docker-compose
-    for container in airflow-scheduler airflow-worker airflow-triggerer airflow-dag-processor apiserver; do
+    info "Cleaning Airflow logs"
+    for container in scheduler worker triggerer dag-processor apiserver; do
         docker exec "airflow-spark-airflow-${container}-1" bash -c "
-            find /opt/airflow/logs -type f -name '*.log' -mmin +$((LOG_RETENTION_HOURS * 60)) -delete 2>/dev/null || true
+            find /opt/airflow/logs -type f -name '*.log' -mmin +120 -delete 2>/dev/null || true
             find /opt/airflow/logs -type d -empty -delete 2>/dev/null || true
         " 2>/dev/null || warn "Could not clean logs in $container"
     done
@@ -228,62 +352,34 @@ cleanup_airflow_logs() {
 
 cleanup_spark_resources() {
     info "Cleaning Spark resources"
-    for container in spark-master spark-worker-1 spark-worker-2; do
-        docker exec "$container" bash -c "
-            rm -rf /opt/spark/work/* /opt/spark/logs/* /opt/spark/tmp/* 2>/dev/null || true
-            find /tmp -name 'spark-*' -type d -mmin +$((LOG_RETENTION_HOURS * 60)) -exec rm -rf {} + 2>/dev/null || true
-        " 2>/dev/null || warn "Could not clean Spark resources in $container"
+    for worker in spark-master spark-worker-1 spark-worker-2; do
+        docker exec "$worker" bash -c "
+            rm -rf /opt/spark/work/* /opt/spark/logs/* /tmp/spark-* 2>/dev/null || true
+        " 2>/dev/null || warn "Could not clean $worker"
     done
 }
 
-cleanup_streaming_checkpoints() {
-    info "Cleaning streaming checkpoints (keeping last ${CHECKPOINT_RETENTION_HOURS}h)"
-    # CORRECTED: Use worker container for checkpoint cleanup (where tasks run)
-    docker exec airflow-spark-airflow-worker-1 bash -c "
-        find /tmp -name '*checkpoint*' -type d -mmin +$((CHECKPOINT_RETENTION_HOURS * 60)) -exec rm -rf {} + 2>/dev/null || true
-        find /tmp -name 'spark-streaming-*' -type d -mmin +$((CHECKPOINT_RETENTION_HOURS * 60)) -exec rm -rf {} + 2>/dev/null || true
-    " 2>/dev/null || warn "Could not clean checkpoints"
-}
-
-cleanup_kafka_minimal() {
-    info "Minimal Kafka cleanup (3h retention handles data)"
-    # CORRECTED: Use proper kafka container name
-    docker exec airflow-spark-kafka-1 bash -c "
-        find /tmp -name 'kafka-*' -mmin +60 -type f -delete 2>/dev/null || true
-    " 2>/dev/null || warn "Could not clean Kafka temp files"
-}
-
-cleanup_docker_system() {
-    info "Cleaning Docker system resources (preserving data volumes)"
-    
-    # SAFE cleanup - removed --volumes flag to protect MinIO/Postgres/Kafka data
+cleanup_system() {
+    info "System cleanup"
     docker system prune -f >/dev/null 2>&1 || true
-    docker container prune -f >/dev/null 2>&1 || true
-    docker image prune -f -a >/dev/null 2>&1 || true
-    
-    # Only clean truly temporary volumes if they're dangling (unused)
-    docker volume ls -qf dangling=true | grep -E "tmp|temp|cache" | xargs -r docker volume rm 2>/dev/null || true
-}
-
-perform_full_cleanup() {
-    local cleanup_reason="$1"
-    log "🧹 FULL CLEANUP: $cleanup_reason"
-    
-    cleanup_airflow_logs
-    cleanup_spark_resources
-    cleanup_streaming_checkpoints
-    cleanup_kafka_minimal
-    cleanup_docker_system
-    
     sync
     echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null 2>&1 || true
     
     local new_usage=$(get_disk_usage)
-    log "✅ Cleanup complete. Disk usage: ${new_usage}%"
+    log "Cleanup complete. Disk usage: ${new_usage}%"
+}
+
+perform_full_cleanup() {
+    local reason="$1"
+    log "🧹 FULL CLEANUP: $reason"
+    
+    cleanup_airflow_logs
+    cleanup_spark_resources
+    cleanup_system
 }
 
 # =============================================================================
-# CONTAINER RESTART MANAGEMENT
+# CONTAINER MANAGEMENT
 # =============================================================================
 
 restart_streaming_containers() {
@@ -291,32 +387,18 @@ restart_streaming_containers() {
     stop_all_streaming_dags
     sleep 30
     
-    docker restart spark-worker-1 spark-worker-2 >/dev/null 2>&1 || warn "Could not restart Spark workers"
-    docker restart airflow-spark-airflow-worker-1 >/dev/null 2>&1 || warn "Could not restart Airflow worker"
+    docker restart \
+        spark-worker-1 \
+        spark-worker-2 \
+        airflow-spark-airflow-worker-1 \
+        >/dev/null 2>&1 || warn "Some containers failed to restart"
     
     sleep 90
     log "✅ Streaming containers restarted"
 }
 
-restart_all_containers() {
-    log "🔄 Full container restart"
-    stop_all_streaming_dags
-    sleep 30
-    
-    docker restart \
-        airflow-spark-airflow-worker-1 \
-        airflow-spark-airflow-scheduler-1 \
-        spark-worker-1 \
-        spark-worker-2 \
-        spark-master \
-        >/dev/null 2>&1 || warn "Some containers failed to restart"
-    
-    sleep 120
-    log "✅ All containers restarted"
-}
-
 # =============================================================================
-# PHASE-SPECIFIC OPERATIONS
+# PHASE HANDLERS
 # =============================================================================
 
 handle_prep_phase() {
@@ -324,36 +406,29 @@ handle_prep_phase() {
     
     for dag in "${STREAMING_DAGS[@]}"; do
         if is_dag_running_cli "$dag"; then
-            stop_dag "$dag"
+            stop_dag_safely "$dag"
         fi
     done
-    log "🛑 Streaming DAGs stopped for batch preparation"
+    log "🛑 Streaming DAGs stopped for batch"
     
     perform_full_cleanup "pre-batch preparation"
     restart_streaming_containers
-    
-    local disk_usage=$(get_disk_usage)
-    if [ $disk_usage -gt 40 ]; then
-        warn "Disk usage still high (${disk_usage}%) after preparation"
-    else
-        log "✅ System prepared: ${disk_usage}% disk usage"
-    fi
 }
 
 handle_batch_phase() {
-    phase "BATCH PROCESSING MODE"
+    phase "BATCH PROCESSING"
     
     local disk_usage=$(get_disk_usage)
-    local batch_status=$(get_batch_jobs_status)
+    local batch_status=$(get_batch_status)
     
-    info "Batch jobs: $batch_status | Disk: ${disk_usage}%"
+    info "Batch: $batch_status | Disk: ${disk_usage}%"
     
-    if [ $disk_usage -gt $BATCH_STOP_AT ]; then
-        error "CRITICAL: Disk ${disk_usage}% > ${BATCH_STOP_AT}% during batch"
+    if [ $disk_usage -gt $BATCH_DISK_EMERGENCY ]; then
+        error "EMERGENCY: Disk ${disk_usage}% > ${BATCH_DISK_EMERGENCY}%"
         stop_all_streaming_dags
         perform_full_cleanup "emergency during batch"
-    elif [ $disk_usage -gt $BATCH_CLEANUP_AT ]; then
-        warn "High usage during batch: ${disk_usage}% > ${BATCH_CLEANUP_AT}%"
+    elif [ $disk_usage -gt $BATCH_DISK_CLEANUP ]; then
+        warn "High disk usage: ${disk_usage}%"
         perform_full_cleanup "high usage during batch"
     fi
 }
@@ -362,38 +437,38 @@ handle_recovery_phase() {
     phase "POST-BATCH RECOVERY"
     
     perform_full_cleanup "post-batch recovery"
-    restart_all_containers
+    restart_streaming_containers
     
-    log "🚀 Resuming streaming operations"
+    log "🚀 Resuming streaming"
     start_all_streaming_dags
-    
-    log "✅ Recovery complete - back to streaming mode"
 }
 
 handle_streaming_phase() {
     phase "STREAMING MODE"
     
     local disk_usage=$(get_disk_usage)
-    local streaming_status=$(get_streaming_jobs_status)
+    local streaming_status=$(get_streaming_status)
     
     info "Streaming: $streaming_status | Disk: ${disk_usage}%"
     
-    if [ $disk_usage -gt $STREAMING_STOP_AT ]; then
-        error "CRITICAL: Disk ${disk_usage}% > ${STREAMING_STOP_AT}%"
+    if [ $disk_usage -gt $DISK_EMERGENCY_AT ]; then
+        error "EMERGENCY: Disk ${disk_usage}% > ${DISK_EMERGENCY_AT}%"
         stop_all_streaming_dags
         perform_full_cleanup "emergency during streaming"
-    elif [ $disk_usage -gt $STREAMING_CLEANUP_AT ]; then
-        warn "High usage: ${disk_usage}% > ${STREAMING_CLEANUP_AT}%"
+    elif [ $disk_usage -gt $DISK_CLEANUP_AT ]; then
+        warn "High disk usage: ${disk_usage}%"
+        # Stop producer only, keep consumer running
         for dag in "${STREAMING_DAGS[@]}"; do
             if [[ "$dag" == *"producer"* ]]; then
-                stop_dag "$dag"
+                stop_dag_safely "$dag"
             fi
         done
         perform_full_cleanup "high usage during streaming"
     else
+        # Ensure streaming DAGs are running
         for dag in "${STREAMING_DAGS[@]}"; do
             if ! is_dag_running_cli "$dag"; then
-                start_dag "$dag"
+                start_dag_safely "$dag"
                 sleep 30
             fi
         done
@@ -401,36 +476,59 @@ handle_streaming_phase() {
 }
 
 # =============================================================================
-# MAIN MONITORING LOOP
+# MAIN MONITOR LOOP
 # =============================================================================
 
 main_monitor() {
-    log "🚀 BATCH-AWARE STREAMING MANAGER STARTED (AIRFLOW 3.0 CORRECTED)"
+    log "🚀 AIRFLOW 3.0 STREAMING MANAGER STARTED"
     log "📅 Batch window: ${BATCH_START_HOUR}:00 - ${BATCH_END_HOUR}:00"
     log "⏰ Current time: $(date '+%H:%M')"
-    log "💾 Initial disk usage: $(get_disk_usage_gb)"
+    log "💾 Disk usage: $(get_disk_usage_gb)"
     log "📡 Streaming DAGs: ${STREAMING_DAGS[*]}"
     log "🏭 Batch DAGs: ${BATCH_DAGS[*]}"
-    log "🌐 Access Airflow UI at: http://localhost:8085"
+    log "🌐 Airflow UI: http://localhost:8085"
+    
+    # Validate environment
+    if ! get_auth_header >/dev/null 2>&1; then
+        exit 1
+    fi
+    
+    # Validate DAGs exist
+    for dag in "${STREAMING_DAGS[@]}" "${BATCH_DAGS[@]}"; do
+        if ! dag_exists "$dag"; then
+            error "DAG $dag not found in Airflow"
+            exit 1
+        fi
+    done
+    
+    log "✅ Environment validation complete"
     
     while true; do
         local mode=$(get_operation_mode)
         local minutes_to_next=$(get_minutes_until_next_phase)
         local disk_usage=$(get_disk_usage)
         
-        log "📊 Mode: $mode | Disk: ${disk_usage}% | Next phase in: ${minutes_to_next}min"
+        log "📊 Mode: $mode | Disk: ${disk_usage}% | Next: ${minutes_to_next}min"
         
         case $mode in
-            prep) handle_prep_phase; sleep $PREP_RECOVERY_INTERVAL ;;
-            batch) handle_batch_phase; sleep $BATCH_CHECK_INTERVAL ;;
-            recovery) handle_recovery_phase; sleep $PREP_RECOVERY_INTERVAL ;;
-            streaming) handle_streaming_phase; sleep $STREAMING_CHECK_INTERVAL ;;
+            prep) 
+                handle_prep_phase
+                sleep $TRANSITION_CHECK ;;
+            batch) 
+                handle_batch_phase
+                sleep $BATCH_CHECK ;;
+            recovery) 
+                handle_recovery_phase
+                sleep $TRANSITION_CHECK ;;
+            streaming) 
+                handle_streaming_phase
+                sleep $STREAMING_CHECK ;;
         esac
     done
 }
 
 # =============================================================================
-# COMMAND LINE INTERFACE
+# STATUS AND CONTROL
 # =============================================================================
 
 show_status() {
@@ -438,77 +536,82 @@ show_status() {
     local disk_usage=$(get_disk_usage)
     local disk_details=$(get_disk_usage_gb)
     local minutes_to_next=$(get_minutes_until_next_phase)
-    local streaming_status=$(get_streaming_jobs_status)
-    local batch_status=$(get_batch_jobs_status)
+    local streaming_status=$(get_streaming_status)
+    local batch_status=$(get_batch_status)
     
-    echo "📊 BATCH-AWARE STREAMING STATUS (AIRFLOW 3.0 CORRECTED)"
-    echo "======================================================="
-    echo "⏰ Current time: $(date '+%H:%M:%S')"
-    echo "🔄 Current mode: $mode"
-    echo "⏳ Next phase in: ${minutes_to_next} minutes"
-    echo "💾 Disk usage: $disk_details"
+    echo "📊 AIRFLOW 3.0 STREAMING MANAGER STATUS"
+    echo "====================================="
+    echo "⏰ Time: $(date '+%H:%M:%S')"
+    echo "🔄 Mode: $mode"
+    echo "⏳ Next phase: ${minutes_to_next} minutes"
+    echo "💾 Disk: $disk_details"
     echo "📡 Streaming: $streaming_status"
-    echo "🏭 Batch jobs: $batch_status"
-    echo "📅 Batch window: ${BATCH_START_HOUR}:00 - ${BATCH_END_HOUR}:00"
-    echo "🌐 Airflow UI: http://localhost:8085"
+    echo "🏭 Batch: $batch_status"
+    echo "🔒 Safe mode: $SAFE_MODE"
+    echo "🌐 UI: http://localhost:8085"
     echo ""
-    echo "🐳 Container Status:"
-    docker ps --format "table {{.Names}}\t{{.Status}}" | grep -E "(airflow|spark)" | head -10
+    
+    # Test API connectivity
+    if command -v docker >/dev/null && [ -n "${AIRFLOW_USER:-}" ]; then
+        local auth=$(get_auth_header)
+        local api_test=$(docker exec airflow-spark-airflow-apiserver-1 \
+            curl -s -o /dev/null -w "%{http_code}" -u "$auth" \
+            "http://localhost:8080/api/v2/monitor/health" 2>/dev/null || echo "000")
+        if [ "$api_test" = "200" ]; then
+            echo "✅ Airflow 3.0 API v2: Connected"
+        else
+            echo "❌ Airflow 3.0 API v2: Failed (HTTP $api_test)"
+        fi
+    else
+        echo "⚠️  Set AIRFLOW_USER and AIRFLOW_PASS to test API"
+    fi
 }
 
 show_help() {
     cat << EOF
-🎯 CONFIGURABLE BATCH-AWARE STREAMING MANAGER (AIRFLOW 3.0 CORRECTED)
+🎯 AIRFLOW 3.0 BATCH-AWARE STREAMING MANAGER
 
 USAGE: $0 <command>
 
 COMMANDS:
-    monitor     - Start continuous monitoring (run in screen/tmux)
+    monitor     - Start continuous monitoring
     status      - Show current system status
-    cleanup     - Perform one-time cleanup
     start       - Start all streaming DAGs
     stop        - Stop all streaming DAGs
-    restart     - Restart streaming containers
+    cleanup     - Manual cleanup
     help        - Show this help
 
-AIRFLOW 3.0 CORRECTIONS MADE:
-    ✅ DAG operations now use scheduler container (not worker)
-    ✅ Container names match your docker-compose.yml
-    ✅ Added API server status checking
-    ✅ Corrected Kafka container name
-    ✅ Added scheduler to restart operations
+REQUIREMENTS:
+    • Apache Airflow 3.0+
+    • Streaming DAGs must have schedule=None
+    • Environment variables: AIRFLOW_USER, AIRFLOW_PASS
 
-CONFIGURATION:
-    Edit the top of this script to customize:
-    - Batch timing (BATCH_START_HOUR, BATCH_END_HOUR)
-    - DAG lists (STREAMING_DAGS, BATCH_DAGS arrays)
-    - Disk thresholds and intervals
+SETUP:
+    export AIRFLOW_USER=admin
+    export AIRFLOW_PASS=your_password
+    screen -S streaming -dm $0 monitor
 
-EXAMPLES:
-    screen -S streaming -dm $0 monitor    # Start monitoring
-    $0 status                             # Check status
-    $0 cleanup                            # Emergency cleanup
-
-ACCESS YOUR AIRFLOW:
-    🌐 Web UI: http://localhost:8085
-    📊 Spark Master: http://localhost:8060
-    🔧 Jupyter: http://localhost:8888
-    📋 Kafka UI: http://localhost:9090
+FEATURES:
+    ✅ Airflow 3.0 API v2 compliant
+    ✅ Secure credential handling
+    ✅ Intelligent phase management
+    ✅ Resource monitoring & cleanup
+    ✅ Safe DAG triggering with cooldowns
+    ✅ Queue overflow prevention
 
 EOF
 }
 
 # =============================================================================
-# MAIN ENTRY POINT
+# MAIN
 # =============================================================================
 
 case "${1:-help}" in
     monitor) main_monitor ;;
     status) show_status ;;
-    cleanup) perform_full_cleanup "manual cleanup" ;;
     start) start_all_streaming_dags ;;
     stop) stop_all_streaming_dags ;;
-    restart) restart_streaming_containers ;;
+    cleanup) perform_full_cleanup "manual cleanup" ;;
     help|--help|-h) show_help ;;
     *) echo "❌ Unknown command: $1"; show_help; exit 1 ;;
 esac
