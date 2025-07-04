@@ -388,7 +388,7 @@ def main():
             )
         
         print("\n💾 Starting REAL-TIME TRENDS streaming...")
-        print("⏰ Micro-batches every 5 seconds (30s rolling window)")
+        print("⏰ Micro-batches every 3 seconds (30s rolling window)")
         print("🚀 Latest messages only - skips old data")
         print("🎯 Optimized for real-time dashboard updates")
         print("-" * 60)
@@ -398,7 +398,7 @@ def main():
             .writeStream \
             .foreachBatch(write_to_streaming_delta) \
             .outputMode("append") \
-            .trigger(processingTime='15 seconds') \
+            .trigger(processingTime='5 seconds') \
             .option("checkpointLocation", "/tmp/spark-streaming-checkpoint/github-realtime") \
             .queryName("github-realtime-trends") \
             .start()
