@@ -22,7 +22,7 @@ from pathlib import Path
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col, lit, current_timestamp, size, from_json, udf, 
-    explode, coalesce, count
+    explode, coalesce, count, now, hour
 )
 from pyspark.sql.types import (
     ArrayType, StringType, StructType, StructField, IntegerType
@@ -266,10 +266,9 @@ def write_to_streaming_delta(dataframe, epoch_id):
         )
         
         # Step 5: Create final DataFrame with exact schema match
-        now = current_timestamp()
         
         final_df = aggregated_df.select(
-            lit(23).cast(IntegerType()).alias("hour"),
+            hour(now).alias("hour"),
             col("keyword").alias("keyword"),
             col("mention_count").cast(IntegerType()).alias("mentions"),
             col("repo_name").alias("top_repo"),
