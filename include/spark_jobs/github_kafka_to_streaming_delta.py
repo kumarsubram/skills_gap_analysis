@@ -398,7 +398,7 @@ def main():
             .writeStream \
             .foreachBatch(write_to_streaming_delta) \
             .outputMode("append") \
-            .trigger(processingTime='5 seconds') \
+            .trigger(processingTime='3 seconds') \
             .option("checkpointLocation", "/tmp/spark-streaming-checkpoint/github-realtime") \
             .queryName("github-realtime-trends") \
             .start()
