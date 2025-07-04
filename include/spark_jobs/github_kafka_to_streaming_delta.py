@@ -228,72 +228,95 @@ def create_ultra_fast_extraction_udf(keywords_list):
 
 
 def write_to_streaming_delta(dataframe, epoch_id):
-      """Ultra-fast single event write - NO aggregation for real-time UI"""
+    """Ultra-fast single table write - NO aggregation complexity"""
+    
+    streaming_table_path = "s3a://delta-lake/bronze/bronze_github_streaming_keyword_extractions"
+    batch_id = f"batch_{epoch_id}"
+    
+    print(f"\n📦 BATCH {epoch_id} (ULTRA-FAST)")
+    
+    try:
+        # Step 1: Fast count check
+        record_count = dataframe.count()
+        print(f"📊 Records: {record_count}")
+        
+        if record_count == 0:
+            print("⏩ Empty batch - skipping")
+            return
+        
+        # Step 2: Filter for events with technologies
+        tech_events = dataframe.filter(size(col("technologies")) > 0)
+        tech_count = tech_events.count()
+        print(f"✅ Tech events: {tech_count}")
+        
+        if tech_count == 0:
+            print("⏩ No tech events")
+            return
+        
+        # Step 3: Explode technologies
+        exploded_df = tech_events.select(
+            explode(col("technologies")).alias("keyword"),
+            col("event_id"),
+            col("repo_name")
+        )
+        
+        # Step 4: Aggregate by keyword and repo
+        aggregated_df = exploded_df.groupBy("keyword", "repo_name").agg(
+            count("event_id").alias("mention_count")
+        )
+        
+        # Step 5: Create final DataFrame with exact schema match
 
-      streaming_table_path = "s3a://delta-lake/bronze/bronze_github_streaming_keyword_extractions"
-      batch_id = f"batch_{epoch_id}"
-
-      print(f"\n📦 BATCH {epoch_id} (REAL-TIME)")
-
-      try:
-          # Step 1: Filter for events with technologies
-          tech_events = dataframe.filter(size(col("technologies")) > 0)
-          tech_count = tech_events.count()
-
-          if tech_count == 0:
-              print("⏩ No tech events")
-              return
-
-          print(f"✅ Tech events: {tech_count}")
-
-          # Step 2: Explode technologies WITHOUT aggregation
-          # Each technology mention becomes a separate row immediately
-          now = current_timestamp()
-
-          final_df = tech_events.select(
-              explode(col("technologies")).alias("keyword"),
-              col("event_id"),
-              col("repo_name"),
-              col("processing_time")
-          ).select(
-              hour(now).alias("hour"),
-              col("keyword"),
-              lit(1).cast(IntegerType()).alias("mentions"),  # Each row = 1 mention
-              col("repo_name").alias("top_repo"),
-              lit(1).cast(IntegerType()).alias("repo_mentions"),
-              lit(1).cast(IntegerType()).alias("event_mentions"),
-              now.cast("date").alias("date"),
-              lit("streaming").alias("source_file"),
-              col("processing_time"),
-              col("event_id"),
-              col("processing_time").alias("event_timestamp"),
-              lit("Streaming").alias("event_type"),
-              lit("streaming").alias("actor_login"),
-              now.alias("kafka_timestamp"),
-              lit(batch_id).alias("batch_id"),
-              now.alias("window_start"),
-              now.alias("window_end")
-          )
-
-          # Step 3: Direct write without aggregation
-          final_count = final_df.count()
-          print(f"🚀 Writing {final_count} individual events...")
-
-          final_df.write \
-              .format("delta") \
-              .mode("append") \
-              .option("dataChange", "true") \
-              .option("mergeSchema", "false") \
-              .option("overwriteSchema", "false") \
-              .partitionBy("date", "hour") \
-              .save(streaming_table_path)
-
-          print(f"✅ SUCCESS: {final_count} events written (no aggregation)")
-
-      except Exception as batch_error:
-          print(f"❌ Batch {epoch_id} error: {batch_error}")
-
-      print(f"📋 Batch {epoch_id} completed")
+        now = current_timestamp()
+        
+        final_df = aggregated_df.select(
+            hour(now).alias("hour"),
+            col("keyword").alias("keyword"),
+            col("mention_count").cast(IntegerType()).alias("mentions"),
+            col("repo_name").alias("top_repo"),
+            col("mention_count").cast(IntegerType()).alias("repo_mentions"),
+            col("mention_count").cast(IntegerType()).alias("event_mentions"),
+            now.cast("date").alias("date"),
+            lit("streaming").alias("source_file"),
+            now.alias("processing_time"),
+            lit(None).cast(StringType()).alias("event_id"),
+            now.alias("event_timestamp"),
+            lit("Streaming").alias("event_type"),
+            lit("streaming").alias("actor_login"),
+            now.alias("kafka_timestamp"),
+            lit(batch_id).alias("batch_id"),
+            now.alias("window_start"),
+            now.alias("window_end")
+        )
+        
+        # Step 6: Ultra-fast write (no verification overhead)
+        final_count = final_df.count()
+        print(f"🚀 Writing {final_count} records...")
+        
+        final_df.write \
+            .format("delta") \
+            .mode("append") \
+            .option("dataChange", "true") \
+            .option("mergeSchema", "false") \
+            .option("overwriteSchema", "false") \
+            .partitionBy("date", "hour") \
+            .save(streaming_table_path)
+        
+        print(f"✅ SUCCESS: {final_count} records written")
+        
+        # Show quick sample for small batches
+        if final_count <= 3:
+            try:
+                sample = final_df.collect()
+                for i, record in enumerate(sample):
+                    print(f"   {i+1}. {record.keyword}: {record.mentions}")
+            except Exception as sample_error:
+                print(f"⚠️ Could not show sample: {sample_error}")
+        
+    except Exception as batch_error:
+        print(f"❌ Batch {epoch_id} error: {batch_error}")
+        
+    print(f"📋 Batch {epoch_id} completed")
 
 
 def main():
@@ -332,7 +355,7 @@ def main():
             .option("subscribe", "github-events-raw") \
             .option("startingOffsets", "latest") \
             .option("failOnDataLoss", "false") \
-            .option("maxOffsetsPerTrigger", "50") \
+            .option("maxOffsetsPerTrigger", "100") \
             .option("kafka.consumer.group.id", "github-realtime-trends") \
             .option("kafka.consumer.auto.offset.reset", "latest") \
             .option("kafka.consumer.enable.auto.commit", "false") \
@@ -374,7 +397,7 @@ def main():
             .writeStream \
             .foreachBatch(write_to_streaming_delta) \
             .outputMode("append") \
-            .trigger(processingTime='3 seconds') \
+            .trigger(processingTime='15 seconds') \
             .option("checkpointLocation", "/tmp/spark-streaming-checkpoint/github-realtime") \
             .queryName("github-realtime-trends") \
             .start()
