@@ -295,6 +295,10 @@ def write_to_streaming_delta(dataframe, epoch_id):
         final_df.write \
             .format("delta") \
             .mode("append") \
+            .option("dataChange", "true") \
+            .option("mergeSchema", "false") \
+            .option("overwriteSchema", "false") \
+            .partitionBy("date", "hour") \
             .save(streaming_table_path)
         
         print(f"✅ SUCCESS: {final_count} records written")

@@ -121,11 +121,21 @@ def create_empty_streaming_table() -> bool:
             storage_options=storage_options,
             mode="overwrite",
             configuration={
-                "delta.logRetentionDuration": "1 day",
-                "delta.deletedFileRetentionDuration": "1 day",
-                "delta.autoOptimize.optimizeWrite": "true",
-                "delta.autoOptimize.autoCompact": "true"
-            }
+                # 1-hour retention for real-time dashboard
+                "delta.logRetentionDuration": "1 hour",
+                "delta.deletedFileRetentionDuration": "1 hour",
+                # DISABLE auto-optimization - we WANT small files for 30-second queries!
+                "delta.autoOptimize.optimizeWrite": "false",   # Keep files small
+                "delta.autoOptimize.autoCompact": "false",     # No compaction needed
+                # Small files are GOOD for recent-data queries
+                "delta.targetFileSize": "1048576",             # 1MB - perfect for 30s queries
+                # Optimize data skipping for timestamp queries
+                "delta.dataSkippingNumIndexedCols": "3",       # Just timestamp columns
+                "delta.dataSkippingStatsColumns": "processing_time,kafka_timestamp,event_timestamp",
+                # Checkpoint settings
+                "delta.checkpointInterval": "100"              # Every 100 commits
+            },
+            partition_by=["date", "hour"]  # Partition by date and hour for efficient pruning
         )
         
         
