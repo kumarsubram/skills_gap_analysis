@@ -22,7 +22,7 @@ from pathlib import Path
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col, lit, current_timestamp, size, from_json, udf, 
-    explode, coalesce, count, now, hour
+    explode, coalesce, count, now, hour, minute
 )
 from pyspark.sql.types import (
     ArrayType, StringType, StructType, StructField, IntegerType
@@ -271,6 +271,7 @@ def write_to_streaming_delta(dataframe, epoch_id):
         
         final_df = aggregated_df.select(
             hour(now).alias("hour"),
+            minute(now).alias("minute"),
             col("keyword").alias("keyword"),
             col("mention_count").cast(IntegerType()).alias("mentions"),
             col("repo_name").alias("top_repo"),
@@ -299,7 +300,7 @@ def write_to_streaming_delta(dataframe, epoch_id):
             .option("dataChange", "true") \
             .option("mergeSchema", "false") \
             .option("overwriteSchema", "false") \
-            .partitionBy("date", "hour") \
+            .partitionBy("date", "hour", "minute") \
             .save(streaming_table_path)
         
         print(f"✅ SUCCESS: {final_count} records written")

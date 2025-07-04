@@ -48,6 +48,7 @@ def get_streaming_table_schema() -> pa.Schema:
     return pa.schema([
         # Original batch columns (for compatibility)
         ('hour', pa.int32()),
+        ('minute', pa.int32()),
         ('keyword', pa.string()),
         ('mentions', pa.int32()),
         ('top_repo', pa.string()),
@@ -121,21 +122,34 @@ def create_empty_streaming_table() -> bool:
             storage_options=storage_options,
             mode="overwrite",
             configuration={
-                # 1-hour retention for real-time dashboard
-                "delta.logRetentionDuration": "1 hour",
-                "delta.deletedFileRetentionDuration": "1 hour",
-                # DISABLE auto-optimization - we WANT small files for 30-second queries!
-                "delta.autoOptimize.optimizeWrite": "false",   # Keep files small
-                "delta.autoOptimize.autoCompact": "false",     # No compaction needed
-                # Small files are GOOD for recent-data queries
-                "delta.targetFileSize": "1048576",             # 1MB - perfect for 30s queries
-                # Optimize data skipping for timestamp queries
-                "delta.dataSkippingNumIndexedCols": "3",       # Just timestamp columns
-                "delta.dataSkippingStatsColumns": "processing_time,kafka_timestamp,event_timestamp",
+                # Data retention (open-source Delta Lake)
+                "delta.logRetentionDuration": "interval 1 hour",
+                "delta.deletedFileRetentionDuration": "interval 1 hour",
+
+                # Auto-optimization (available in open-source)
+                "delta.autoOptimize.optimizeWrite": "false",
+                "delta.autoOptimize.autoCompact": "false",
+
+                # File size optimization
+                "delta.targetFileSize": "2097152",  # 2MB
+
+                # Data skipping (open-source feature)
+                "delta.dataSkippingNumIndexedCols": "5",
+                "delta.dataSkippingStatsColumns": "date,hour,minute,processing_time,kafka_timestamp",
+
                 # Checkpoint settings
-                "delta.checkpointInterval": "100"              # Every 100 commits
+                "delta.checkpointInterval": "50",
+
+                # Column mapping (if needed for schema evolution)
+                "delta.columnMapping.mode": "none",
+
+                # Enable change data feed (open-source)
+                "delta.enableChangeDataFeed": "false",
+
+                # Isolation level
+                "delta.isolationLevel": "WriteSerializable"
             },
-            partition_by=["date", "hour"]  # Partition by date and hour for efficient pruning
+            partition_by=["date", "hour", "minute"]  # Partition by date, hour, and minute for efficient pruning
         )
         
         
