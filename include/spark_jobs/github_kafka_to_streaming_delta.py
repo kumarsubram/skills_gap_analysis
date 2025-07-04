@@ -266,6 +266,8 @@ def write_to_streaming_delta(dataframe, epoch_id):
         )
         
         # Step 5: Create final DataFrame with exact schema match
+
+        now = current_timestamp()
         
         final_df = aggregated_df.select(
             hour(now).alias("hour"),
