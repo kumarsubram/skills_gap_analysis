@@ -257,12 +257,12 @@ def cleanup_old_partitions(hours_to_keep=1) -> bool:
             # Delete old partitions
             dt.delete(delete_expr)
             
-            # Vacuum immediately to clean up files
-            print("🧹 Running VACUUM to clean up deleted files...")
-            dt.vacuum(retention_hours=0)
-            
+            # Skip VACUUM or use minimum allowed retention
+            # Delta enforces minimum retention, so we'll just delete without vacuum
+            # The files will be cleaned up in the next scheduled vacuum run
             print(f"✅ Cleanup complete: {rows_to_delete:,} rows removed")
             print(f"📊 Remaining rows: {rows_before - rows_to_delete:,}")
+            print("ℹ️ Deleted files will be cleaned in next scheduled VACUUM")
         else:
             print("✅ No old partitions to clean")
         
