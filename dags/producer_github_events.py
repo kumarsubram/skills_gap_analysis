@@ -17,6 +17,7 @@ import re
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
+from datetime import timezone
 
 
 def load_tech_keywords():
@@ -366,7 +367,7 @@ def produce_github_events(**context):
 # DAG definition - SAME NAME, NO CHANGES
 default_args = {
     'owner': 'data-engineering',
-    'start_date': datetime(2025, 6, 23),
+    "start_date": datetime(2025, 6, 23, tzinfo=timezone.utc),
     'email_on_failure': False,
     'retries': 1,  # Retry once if failure occurs
 }
