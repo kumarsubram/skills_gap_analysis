@@ -205,6 +205,74 @@ def get_streaming_table_info() -> Optional[Dict]:
         return None
 
 
+def cleanup_old_partitions(hours_to_keep=1) -> bool:
+    """
+    Clean up old partitions keeping only specified hours of data
+    
+    Args:
+        hours_to_keep: Number of hours of data to retain (default: 1)
+    
+    Returns:
+        bool: True if cleanup successful, False otherwise
+    """
+    from datetime import datetime, timedelta, timezone
+    
+    table_path = get_streaming_table_path()
+    storage_options = get_minio_storage_options()
+    
+    try:
+        # Calculate cutoff time
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours_to_keep)
+        cutoff_date = cutoff_time.date()
+        cutoff_hour = cutoff_time.hour
+        
+        print("\n🧹 Cleaning old partitions")
+        print(f"⏰ Keeping data from: {cutoff_date} {cutoff_hour:02d}:00 UTC onwards")
+        
+        # Load Delta table
+        dt = DeltaTable(table_path, storage_options=storage_options)
+        
+        # Count rows before deletion
+        df_before = dt.to_pandas()
+        rows_before = len(df_before)
+        
+        if rows_before == 0:
+            print("📭 Table is empty - no cleanup needed")
+            return True
+        
+        # Count rows to delete
+        old_rows = df_before[
+            (df_before['date'] < cutoff_date) | 
+            ((df_before['date'] == cutoff_date) & (df_before['hour'] < cutoff_hour))
+        ]
+        rows_to_delete = len(old_rows)
+        
+        if rows_to_delete > 0:
+            print(f"🗑️ Deleting {rows_to_delete:,} rows from old partitions")
+            
+            # Perform deletion using deltalake Python API
+            # Build the deletion predicate
+            delete_expr = f"(date < '{cutoff_date}') OR (date = '{cutoff_date}' AND hour < {cutoff_hour})"
+            
+            # Delete old partitions
+            dt.delete(delete_expr)
+            
+            # Vacuum immediately to clean up files
+            print("🧹 Running VACUUM to clean up deleted files...")
+            dt.vacuum(retention_hours=0)
+            
+            print(f"✅ Cleanup complete: {rows_to_delete:,} rows removed")
+            print(f"📊 Remaining rows: {rows_before - rows_to_delete:,}")
+        else:
+            print("✅ No old partitions to clean")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Cleanup failed: {e}")
+        return False
+
+
 def ensure_streaming_table_exists() -> bool:
     """
     Ensure streaming table exists with correct enhanced schema
@@ -241,7 +309,17 @@ def ensure_streaming_table_exists() -> bool:
                 return False
             else:
                 print("✅ Enhanced schema verified")
-                return True
+                
+                # NEW: Clean up old partitions at startup
+                print("\n🔄 Running startup cleanup...")
+                cleanup_success = cleanup_old_partitions(hours_to_keep=1)
+                
+                if cleanup_success:
+                    print("✅ Startup cleanup completed")
+                    return True
+                else:
+                    print("⚠️ Cleanup failed but table is still usable")
+                    return True  # Still return True as table exists and is usable
         else:
             print("❌ Could not verify table schema")
             return False
