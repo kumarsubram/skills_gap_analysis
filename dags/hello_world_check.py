@@ -13,7 +13,7 @@ def say_goodbye():
     return "complete"
 
 dag = DAG(
-    'hello_world_test',
+    'hello_world_check',
     description='Super simple test DAG',
     start_date=datetime(2025, 6, 15),
     schedule=None,

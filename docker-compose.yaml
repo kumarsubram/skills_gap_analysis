@@ -43,7 +43,7 @@
 #                                Default: ''
 #
 # Feel free to modify this file to suit your needs.
----
+
 x-airflow-common:
   &airflow-common
   # In order to add custom dependencies or upgrade provider distributions you can use your extended image.
@@ -55,10 +55,11 @@ x-airflow-common:
     &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    AIRFLOW__API__BASE_URL: ${AIRFLOW__API__BASE_URL:-http://localhost:8085}
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
     AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
     AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
-    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-}
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://airflow-apiserver:8080/execution/'
@@ -67,10 +68,18 @@ x-airflow-common:
     AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: ${AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL:-30}
     AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL: ${AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL:-10}
     AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: ${AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT:-30}
-    # Fix the pip requirements to actually use the .env value
-    _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-apache-airflow-providers-apache-spark}
     # Custom config
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
+    MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+    MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+    MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+    MINIO_BUCKET: ${MINIO_BUCKET}
+    AIRFLOW_ENV: ${AIRFLOW_ENV}
+    VPS_IP: ${VPS_IP}
+    SPARK_LOCAL_DIRS: /opt/airflow/spark-tmp
+    TMPDIR: /opt/airflow/spark-tmp
+    JAVA_IO_TMPDIR: /opt/airflow/spark-tmp  
+    GITHUB_TOKEN: ${GITHUB_TOKEN}
   volumes:
     - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
     - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
@@ -78,6 +87,7 @@ x-airflow-common:
     - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
     - ${AIRFLOW_PROJ_DIR:-.}/include:/opt/airflow/include
     - ${AIRFLOW_PROJ_DIR:-.}/data:/opt/airflow/data
+    - airflow-tmp:/opt/airflow/spark-tmp
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     &airflow-common-depends-on
@@ -90,11 +100,18 @@ services:
   postgres:
     image: postgres:15
     environment:
-      POSTGRES_USER: airflow
-      POSTGRES_PASSWORD: airflow
-      POSTGRES_DB: airflow
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - postgres-db-volume:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          memory: 512MB
+        reservations:
+          memory: 256MB
+    command: postgres -c shared_buffers=128MB -c effective_cache_size=256MB -c max_connections=50
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "airflow"]
       interval: 10s
@@ -115,6 +132,13 @@ services:
       retries: 50
       start_period: 30s
     restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 256MB
+        reservations:
+          memory: 128MB
+
 
   airflow-apiserver:
     <<: *airflow-common
@@ -165,6 +189,7 @@ services:
 
   airflow-worker:
     <<: *airflow-common
+    hostname: airflow-worker
     command: celery worker
     healthcheck:
       # yamllint disable rule:line-length
@@ -294,8 +319,8 @@ services:
       <<: *airflow-common-env
       _AIRFLOW_DB_MIGRATE: 'true'
       _AIRFLOW_WWW_USER_CREATE: 'true'
-      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
-      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD}
       _PIP_ADDITIONAL_REQUIREMENTS: ''
     user: "0:0"
 
@@ -353,12 +378,14 @@ services:
       - SPARK_CONF_DIR=/opt/spark/conf
       - PYSPARK_PYTHON=python3.12
       - PYSPARK_DRIVER_PYTHON=python3.12
+      - SPARK_OPTS=--conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog
+      - SPARK_WORKER_DIR=/opt/spark/work
     ports:
       - "8060:8080"  # Spark Master Web UI
       - "7077:7077"  # Spark Master Port
     volumes:
       - spark-logs:/opt/spark/logs
-      - spark-events:/opt/spark/work-dir
+      - spark-events:/opt/spark/work
       - ${AIRFLOW_PROJ_DIR:-.}/data:/opt/spark/data
       - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/spark/config
     healthcheck:
@@ -379,26 +406,42 @@ services:
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     environment:
       - SPARK_MASTER=spark://spark-master:7077
-      - SPARK_WORKER_CORES=${SPARK_WORKER_CORES:-2}
-      - SPARK_WORKER_MEMORY=${SPARK_WORKER_MEMORY:-2G}
+      - SPARK_WORKER_CORES=${SPARK_WORKER_CORES:-1}
+      - SPARK_WORKER_MEMORY=${SPARK_WORKER_MEMORY:-3G}
       - SPARK_WORKER_PORT=8881
       - SPARK_WORKER_WEBUI_PORT=8081
+      - SPARK_WORKER_CLEANUP_ENABLED=true
+      - SPARK_WORKER_CLEANUP_INTERVAL=1800
+      - SPARK_WORKER_CLEANUP_APPDATA_TTL=3600
       - SPARK_CONF_DIR=/opt/spark/conf
       - PYSPARK_PYTHON=python3.12
       - PYSPARK_DRIVER_PYTHON=python3.12
+      - SPARK_OPTS=--conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog
+      - SPARK_WORKER_DIR=/opt/spark/work
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT}
+      - MINIO_BUCKET=${MINIO_BUCKET}
+      - SPARK_LOCAL_DIRS=/opt/spark/tmp
     ports:
-      - "8061:8081"  # Worker 1 Web UI
+      - "8061:8081"
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 3G
     volumes:
       - spark-logs:/opt/spark/logs
-      - spark-events:/opt/spark/work-dir
+      - spark-events:/opt/spark/work          # ✅ FIX: Mount work directory properly
       - ${AIRFLOW_PROJ_DIR:-.}/data:/opt/spark/data
       - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/spark/config
+      - spark-worker-1-tmp:/opt/spark/tmp     # ✅ Keep tmp separate
     depends_on:
       spark-master:
         condition: service_healthy
     restart: always
 
-  # Spark Worker 2  
   spark-worker-2:
     build:
       context: .
@@ -408,27 +451,215 @@ services:
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     environment:
       - SPARK_MASTER=spark://spark-master:7077
-      - SPARK_WORKER_CORES=${SPARK_WORKER_CORES:-2}
-      - SPARK_WORKER_MEMORY=${SPARK_WORKER_MEMORY:-2G}
+      - SPARK_WORKER_CORES=${SPARK_WORKER_CORES:-1}
+      - SPARK_WORKER_MEMORY=${SPARK_WORKER_MEMORY:-3G}
       - SPARK_WORKER_PORT=8882
-      - SPARK_WORKER_WEBUI_PORT=8081
+      - SPARK_WORKER_WEBUI_PORT=8082
+      - SPARK_WORKER_CLEANUP_ENABLED=true
+      - SPARK_WORKER_CLEANUP_INTERVAL=1800
+      - SPARK_WORKER_CLEANUP_APPDATA_TTL=3600
       - SPARK_CONF_DIR=/opt/spark/conf
       - PYSPARK_PYTHON=python3.12
       - PYSPARK_DRIVER_PYTHON=python3.12
+      - SPARK_OPTS=--conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog
+      - SPARK_WORKER_DIR=/opt/spark/work
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT}
+      - MINIO_BUCKET=${MINIO_BUCKET}
+      - SPARK_LOCAL_DIRS=/opt/spark/tmp
     ports:
-      - "8062:8081"  # Worker 2 Web UI
+      - "8062:8082"
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 3G
     volumes:
       - spark-logs:/opt/spark/logs
-      - spark-events:/opt/spark/work-dir
+      - spark-events:/opt/spark/work          # ✅ FIX: Mount work directory properly
       - ${AIRFLOW_PROJ_DIR:-.}/data:/opt/spark/data
       - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/spark/config
+      - spark-worker-2-tmp:/opt/spark/tmp     # ✅ NEW: Separate tmp volume for worker 2
     depends_on:
       spark-master:
         condition: service_healthy
     restart: always
+
+  # ===== KAFKA CLUSTER =====
+  zookeeper:
+    image: 'confluentinc/cp-zookeeper:7.9.1'
+    environment:
+      - ZOOKEEPER_CLIENT_PORT=2181
+      - ZOOKEEPER_TICK_TIME=2000
+    volumes:
+      - 'zookeeper-data:/var/lib/zookeeper/data'
+      - 'zookeeper-logs:/var/lib/zookeeper/log'
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'nc -z localhost 2181 || exit 1'
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  kafka:
+    image: 'confluentinc/cp-kafka:7.9.1'
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - '9092:9092'
+    environment:
+      - KAFKA_BROKER_ID=1
+      - 'KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181'
+      - 'KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT'
+      - 'KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:29092,PLAINTEXT_HOST://${VPS_IP}:9092'
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
+      - KAFKA_HEAP_OPTS=-Xmx1G -Xms1G
+      - KAFKA_JVM_PERFORMANCE_OPTS=-server -XX:+UseG1GC -XX:MaxGCPauseMillis=20
+    volumes:
+      - 'kafka-data:/var/lib/kafka/data'
+    deploy:
+      resources:
+        limits:
+          memory: 1.5G
+        reservations:
+          memory: 1G
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'nc -z localhost 9092 || exit 1'
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  kafka-ui:
+    image: 'provectuslabs/kafka-ui:latest'
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - '9090:8080'
+    environment:
+      - KAFKA_CLUSTERS_0_NAME=streaming-cluster
+      - 'KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:29092'
+      - AUTH_TYPE=LOGIN_FORM
+      - SPRING_SECURITY_USER_NAME=${SPRING_SECURITY_USER_NAME}
+      - SPRING_SECURITY_USER_PASSWORD=${SPRING_SECURITY_USER_PASSWORD}
+    volumes:
+      - '/tmp:/tmp'
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'nc -z localhost 8080 || exit 1'
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+
+  # ===== OBJECT STORAGE =====
+  minio:
+    image: 'quay.io/minio/minio:RELEASE.2025-05-24T17-08-30Z'
+    command: 'server /data --console-address ":9001"'
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ACCESS_KEY}
+      - MINIO_ROOT_PASSWORD=${MINIO_SECRET_KEY}
+    volumes:
+      - 'minio-data:/data'
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'curl -f http://localhost:9000/minio/health/live || exit 1'
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  minio-mc:
+    image: 'minio/mc:latest'
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set myminio http://minio:9000 ${MINIO_ACCESS_KEY} ${MINIO_SECRET_KEY};
+      /usr/bin/mc mb myminio/delta-lake --ignore-existing;
+      /usr/bin/mc mb myminio/spark-warehouse --ignore-existing;
+      /usr/bin/mc mb myminio/kafka-data --ignore-existing;
+      /usr/bin/mc policy set public myminio/delta-lake;
+      /usr/bin/mc policy set public myminio/spark-warehouse;
+      /usr/bin/mc policy set public myminio/kafka-data;
+      exit 0;
+      "
+
+  # ===== JUPYTER NOTEBOOK SERVICE =====
+  jupyter-spark:
+    build:
+      context: .
+      dockerfile: Dockerfile.jupyter
+    container_name: jupyter-spark
+    hostname: jupyter-spark
+    ports:
+      - "8888:8888"  # Jupyter Lab
+      - "4040:4040"  # Spark UI (driver)
+      - "4041:4041"  # Additional Spark UIs
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+      - JUPYTER_TOKEN=${JUPYTER_TOKEN}
+      - SPARK_MASTER=spark://spark-master:7077
+      - SPARK_HOME=/opt/spark
+      - PYTHONPATH=/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9.7-src.zip
+      - PYSPARK_PYTHON=python3.12
+      - PYSPARK_DRIVER_PYTHON=python3.12
+      # MinIO S3 Configuration
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT}
+      - MINIO_BUCKET=${MINIO_BUCKET}
+      # Java configuration
+      - JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+    volumes:
+      - ${AIRFLOW_PROJ_DIR:-.}/notebooks:/home/jovyan/work
+      - ${AIRFLOW_PROJ_DIR:-.}/data:/home/jovyan/data
+      - ${AIRFLOW_PROJ_DIR:-.}/include:/home/jovyan/include
+      - spark-logs:/opt/spark/logs
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8888/lab?"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
 volumes:
   postgres-db-volume:
   # Spark volumes:
   spark-logs:
   spark-events:
+  # Kafka volumes
+  zookeeper-data:
+    driver: local
+  zookeeper-logs:
+    driver: local
+  kafka-data:
+    driver: local
+  # MinIO volumes
+  minio-data:
+    driver: local
+  airflow-tmp:
+    driver: local
+  spark-worker-1-tmp:
+    driver: local
+  spark-worker-2-tmp:
+    driver: local

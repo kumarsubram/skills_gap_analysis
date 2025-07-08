@@ -2,11 +2,12 @@ FROM spark:4.0.0-python3
 
 USER root
 
-# Install Python 3.12
+# Your exact Python 3.12 setup (proven working) + Git for jupyterlab-git
 RUN apt-get update && apt-get install -y \
     software-properties-common \
     curl \
     wget \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 RUN add-apt-repository ppa:deadsnakes/ppa && \
@@ -19,19 +20,29 @@ RUN add-apt-repository ppa:deadsnakes/ppa && \
 # Install pip for Python 3.12
 RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12
 
+# Use the correct Java path from the base image and fix Spark scripts
+ENV JAVA_HOME=/opt/java/openjdk
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+
+# Fix the spark-class script to use the correct Java path
+RUN sed -i 's|/usr/lib/jvm/java-17-openjdk-amd64|/opt/java/openjdk|g' /opt/spark/bin/spark-class || true
+
 # Set Python 3.12 as default
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1 && \
     update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1
 
-# Set up PySpark paths (explicit version without warning)
+# Set up PySpark paths (same as your working setup)
 ENV PYTHONPATH="${SPARK_HOME}/python:${SPARK_HOME}/python/lib/py4j-0.10.9.7-src.zip"
 ENV PYSPARK_PYTHON=python3.12
 ENV PYSPARK_DRIVER_PYTHON=python3.12
 
-# Install only py4j for Python 3.12 (lightweight dependency)
-RUN python3.12 -m pip install --no-cache-dir py4j==0.10.9.9 pandas==2.3.0 pyarrow==20.0.0
+# Override any hardcoded Java paths in Spark configuration
+ENV SPARK_CONF_DIR=/opt/spark/conf
+RUN mkdir -p ${SPARK_CONF_DIR} && \
+    echo "JAVA_HOME=/opt/java/openjdk" > ${SPARK_CONF_DIR}/spark-env.sh && \
+    echo "export JAVA_HOME=/opt/java/openjdk" >> ${SPARK_CONF_DIR}/spark-env.sh
 
-# 🚀 ADD DELTA LAKE JARS (pre-install to avoid runtime download)
+# 🚀 ADD DELTA LAKE JARS (EXACTLY LIKE YOUR WORKING SPARK DOCKERFILE)
 RUN echo "📦 Installing Delta Lake JARs..." && \
     wget -q https://repo1.maven.org/maven2/io/delta/delta-spark_2.13/4.0.0/delta-spark_2.13-4.0.0.jar \
          -O /opt/spark/jars/delta-spark_2.13-4.0.0.jar && \
@@ -41,26 +52,7 @@ RUN echo "📦 Installing Delta Lake JARs..." && \
          -O /opt/spark/jars/antlr4-runtime-4.9.3.jar && \
     echo "✅ Delta Lake JARs installed"
 
-# 🚀 ADD SPARK KAFKA CONNECTOR JARS (UPDATED FOR SPARK 4.0)
-RUN echo "📦 Installing Kafka connector JARs (Spark 4.0 compatible)..." && \
-    # Core Spark-Kafka connector (verified from official docs)
-    wget -q https://repo1.maven.org/maven2/org/apache/spark/spark-sql-kafka-0-10_2.13/4.0.0/spark-sql-kafka-0-10_2.13-4.0.0.jar \
-         -O /opt/spark/jars/spark-sql-kafka-0-10_2.13-4.0.0.jar && \
-    wget -q https://repo1.maven.org/maven2/org/apache/spark/spark-token-provider-kafka-0-10_2.13/4.0.0/spark-token-provider-kafka-0-10_2.13-4.0.0.jar \
-         -O /opt/spark/jars/spark-token-provider-kafka-0-10_2.13-4.0.0.jar && \
-    # Updated Kafka clients (latest stable compatible with Spark 4.0)
-    wget -q https://repo1.maven.org/maven2/org/apache/kafka/kafka-clients/3.9.0/kafka-clients-3.9.0.jar \
-         -O /opt/spark/jars/kafka-clients-3.9.0.jar && \
-    # Compression libraries (updated versions)
-    wget -q https://repo1.maven.org/maven2/org/lz4/lz4-java/1.8.0/lz4-java-1.8.0.jar \
-         -O /opt/spark/jars/lz4-java-1.8.0.jar && \
-    wget -q https://repo1.maven.org/maven2/org/xerial/snappy/snappy-java/1.1.10.7/snappy-java-1.1.10.7.jar \
-         -O /opt/spark/jars/snappy-java-1.1.10.7.jar && \
-    wget -q https://repo1.maven.org/maven2/org/apache/commons/commons-pool2/2.12.0/commons-pool2-2.12.0.jar \
-         -O /opt/spark/jars/commons-pool2-2.12.0.jar && \
-    echo "✅ Kafka + compression JARs installed (Spark 4.0 compatible)"
-
-# Add S3A support JARs (SPARK 4.0 COMPATIBLE - BACK TO WORKING VERSIONS)
+# ADD S3A SUPPORT JARS (EXACTLY LIKE YOUR WORKING SPARK DOCKERFILE)
 RUN echo "📦 Installing S3A JARs (Spark 4.0 compatible - proven working)..." && \
     # Remove any existing S3A JARs
     rm -f /opt/spark/jars/hadoop-aws-*.jar /opt/spark/jars/aws-*sdk*.jar && \
@@ -71,22 +63,31 @@ RUN echo "📦 Installing S3A JARs (Spark 4.0 compatible - proven working)..." &
          -O /opt/spark/jars/aws-java-sdk-bundle-1.12.367.jar && \
     echo "✅ S3A JARs installed (hadoop-aws 3.3.6 + AWS SDK V1 1.12.367 - proven stable)"
 
+# Install Python packages with LATEST JupyterLab
+RUN python3.12 -m pip install --no-cache-dir \
+    py4j==0.10.9.9 \
+    pandas==2.3.0 \
+    pyarrow==20.0.0 \
+    jupyter \
+    jupyterlab>=4.0 \
+    jupyter-collaboration \
+    jupyterlab-git \
+    jupyterlab-lsp \
+    python-lsp-server
+
 # Verify setup
 RUN python3.12 --version && \
     python3.12 -c "import py4j; print('py4j available')" && \
     ls -la /opt/spark/jars/delta* && \
     echo "Setup complete"
 
-# 🔧 Ensure all custom JARs are visible at boot
-ENV SPARK_EXTRA_CLASSPATH="/opt/spark/jars/*"
+# Create jovyan user for Jupyter
+RUN useradd -m -s /bin/bash jovyan && \
+    mkdir -p /home/jovyan/work && \
+    chown -R jovyan:spark /home/jovyan
 
-# 🛠️ FIX: CREATE WORK DIRECTORY FIRST, THEN SET OWNERSHIP
-RUN mkdir -p /opt/spark/work && \
-    chown -R spark:spark /opt/spark/work
+USER jovyan
+WORKDIR /home/jovyan/work
 
-RUN chown -R spark:spark /opt/spark/work
-
-RUN mkdir -p /opt/spark/tmp && chmod -R 777 /opt/spark/tmp
-
-
-USER spark
+# Start Jupyter Lab
+CMD ["jupyter", "lab", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--allow-root"]

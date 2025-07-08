@@ -11,7 +11,7 @@ webserver_config.py
 airflow.cfg
 airflow.db
 data/
-deploy_to_vps.sh
+*.sh
 
 # ===== CRITICAL ADDITIONS FOR PRODUCTION =====
 
@@ -35,6 +35,10 @@ derby.log
 *.swp
 *.swo
 *~
+
+# Claude
+CLAUDE.md
+Can
 
 # OS generated files
 .DS_Store
@@ -110,3 +114,10 @@ coverage.xml
 .pytest_cache/
 .tox/
 .nox/
+# Jupyter Notebook files
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+notebooks/.jupyter/
+notebooks/**/Untitled*.ipynb
+notebooks/**/__pycache__/
+notebooks/**/*.pycnotebooks/.virtual_documents/
