@@ -4,15 +4,14 @@ A production-ready data platform implementing medallion architecture (Bronze →
 
 ## 🎯 Key Features
 
-- **Real-time streaming** with Kafka (3-hour retention) and Spark Structured Streaming
-- **Latest-only consumption** for real-time dashboards (30-second rolling windows)
-- **Automatic hourly restarts** to ensure fresh data and prevent memory issues
+- **Real-time streaming** with Kafka and Spark Structured Streaming
 - **Batch processing** with historical data backfill capabilities
 - **Medallion architecture** for data quality and governance
 - **Automated orchestration** with dependency-aware DAG scheduling
-- **Resource optimization** with batch/streaming coordination
 - **Delta Lake storage** for ACID transactions and time travel
 - **Containerized deployment** for consistency across environments
+- **Technology trend analysis** from GitHub events and job postings
+- **Pre-computed analytics** for 7d, 30d, 90d, and all-time windows
 
 ## 📋 Technology Stack
 
@@ -29,32 +28,34 @@ A production-ready data platform implementing medallion architecture (Bronze →
 
 ## ⚡ Quick Start
 
-### 1. Clone & Configure
+### Prerequisites
+- Docker and Docker Compose installed
+- **Minimum**: 16GB RAM
+- **Recommended**: 32GB+ RAM for production workloads
+
+### 1. Clone the Repository
 ```bash
 git clone <your-repo>
 cd airflow-spark
-cp .env.example .env
-# Edit .env with your secure credentials (see Configuration section below)
 ```
 
-### 2. Start the Platform
+### 2. Set Environment Variables
 ```bash
-# Clean build (recommended first time)
-docker compose down -v --rmi all
-docker compose build --no-cache
-docker compose up -d
-
-# Check all services
-docker compose ps
+cp .env.example .env
+# Edit .env with your credentials (see Configuration section below)
 ```
 
-### 3. Access Web Interfaces
-- **Airflow**: `http://localhost:8085` (use credentials from .env)
+### 3. Start the Platform
+```bash
+docker compose up -d
+```
+
+### 4. Access Web Interfaces
+- **Airflow**: `http://localhost:8085` (credentials from .env)
 - **Spark**: `http://localhost:8060`
-- **Kafka UI**: `http://localhost:9090` (use credentials from .env)
-- **MinIO**: `http://localhost:9001` (use credentials from .env)
-- **JupyterLab**: `http://localhost:8888` (use token from .env)
-- **JupyterLab**: `http://localhost:8888` (use token from .env)
+- **Kafka UI**: `http://localhost:9090` (credentials from .env)
+- **MinIO**: `http://localhost:9001` (credentials from .env)
+- **JupyterLab**: `http://localhost:8888` (token from .env)
 
 ## 🏗️ Data Architecture
 
@@ -140,10 +141,11 @@ GITHUB_TOKEN=your_github_token
 - Consider using environment-specific secrets management
 - GitHub token is optional but recommended for higher API limits
 
-### Memory Requirements
-- **Minimum**: 8GB RAM
-- **Recommended**: 16GB+ RAM
-- **Production**: 32GB+ RAM
+### System Requirements
+- **Minimum**: 16GB RAM
+- **Recommended**: 32GB+ RAM
+- **Production**: 64GB+ RAM
+- **Storage**: 50GB+ available disk space
 
 ## 📊 Pre-configured Buckets
 
@@ -156,52 +158,59 @@ MinIO automatically creates these buckets:
 
 ### Available DAGs
 
-#### Streaming Pipeline (Real-time Dashboard)
-- **`producer_github_events`**: Filters GitHub events by tech keywords → Kafka (3-second intervals)
-- **`consumer_github_events`**: Kafka → Bronze Delta tables (5-second micro-batches, hourly restarts)
-  - **Purpose**: Powers 30-second rolling dashboard with latest GitHub trends
-  - **Strategy**: Always consumes from latest offset (skips old messages)
-  - **Restart**: Automatic hourly restart for fresh data and memory management
+#### Streaming Pipeline
+Streaming DAGs require manual triggering and management:
 
-#### Batch Pipeline (Scheduled)
-- **`daily_github_bronze`**: Historical GitHub data → Bronze (1 PM daily)
-- **`daily_github_processing_analytics`**: Silver → Gold → Analytics (2 PM daily)
-- **`daily_jobs_bronze`**: Job postings APIs → Bronze (3 PM daily)
-- **`daily_delta_vacuum`**: Table maintenance (5:30 PM daily)
+- **`producer_github_events`**: 
+  - Filters GitHub events by technology keywords
+  - Sends to Kafka topic `github-events-raw`
+  - Processes events every 3 seconds
 
-#### Test & Monitoring DAGs
+- **`consumer_github_events`**: 
+  - Consumes from Kafka → Bronze Delta tables
+  - 5-second micro-batch processing
+  - Stores in `bronze_github_streaming_keyword_extractions`
+
+#### Batch Pipeline
+Batch DAGs run automatically on schedule:
+
+- **`daily_github_bronze`**:
+  - Downloads historical GitHub Archive data
+  - Processes date-by-date into Bronze tables
+  - Idempotent - checks if data already exists
+
+- **`daily_github_processing_analytics`**:
+  - Orchestrates Silver → Gold → Analytics pipeline
+  - Creates technology trend analytics
+  - Generates time-windowed insights (7d, 30d, 90d, all-time)
+
+- **`daily_jobs_bronze`**:
+  - Collects job postings from multiple APIs
+  - Stores in Bronze layer for further processing
+
+- **`daily_delta_vacuum`**:
+  - Cleans up old Delta table versions
+  - Optimizes storage and query performance
+
+### DAG Scheduling
+
+#### Streaming DAGs (Manual Trigger)
+- **`producer_github_events`**: Filters GitHub events by tech keywords → Kafka
+- **`consumer_github_events`**: Kafka → Bronze Delta tables
+  - Processes data in 5-second micro-batches
+  - Designed for real-time dashboards
+  - Manual trigger and management required
+
+#### Batch DAGs (Scheduled Daily)
+- `daily_github_bronze` - Historical GitHub data → Bronze
+- `daily_github_processing_analytics` - Silver → Gold → Analytics
+- `daily_jobs_bronze` - Job postings APIs → Bronze
+- `daily_delta_vacuum` - Table maintenance
+
+#### Test DAGs (On-Demand)
 - **`hello_world_check`**: Basic Airflow connectivity test
 - **`simple_spark_check`**: Spark cluster connectivity test
 - **`simple_kafka_producer_check`**: Kafka connectivity test
-
-### Pipeline Coordination
-
-The platform uses a batch-aware streaming manager (`scripts/batch_streaming_manager`) to coordinate:
-
-#### Real-Time Streaming Configuration
-- **Kafka Retention**: 3 hours (messages older than 3 hours are deleted)
-- **Consumer Strategy**: Always starts from latest messages (no lag concerns)
-- **Restart Cycle**: Every hour for fresh data and consistent performance
-- **Processing Interval**: 5-second micro-batches for near real-time updates
-
-#### Daily Schedule
-- **Streaming Phase**: Real-time processing (5:30 PM - 12:30 PM next day)
-- **Prep Phase**: Stops streaming 30 minutes before batch (12:30 PM - 1:00 PM)
-- **Batch Phase**: Historical data processing (1:00 PM - 5:00 PM)
-- **Recovery Phase**: Container restarts and streaming resume (5:00 PM - 5:30 PM)
-
-#### Starting the Manager
-```bash
-# Run in screen session (recommended)
-screen -S streaming -dm ./scripts/batch_streaming_manager monitor
-
-# Check status
-./scripts/batch_streaming_manager status
-
-# Manual control
-./scripts/batch_streaming_manager stop    # Stop streaming
-./scripts/batch_streaming_manager start   # Start streaming
-```
 
 ### Data Processing Examples
 
@@ -258,23 +267,20 @@ docker compose restart spark-master
 docker compose up -d --scale spark-worker=4
 ```
 
-### Management Scripts
+### Useful Scripts
 
 ```bash
-# Clean old logs (runs inside containers)
+# Clean old logs
 ./cleanup_logs.sh
 
 # Clean DAG run history
 ./cleanup_dag_history.sh
 
-# List all Delta tables
+# List all Delta tables with row counts
 ./list_delta_tables.sh
 
 # Deploy to production VPS
 ./deploy_to_vps.sh
-
-# Start streaming coordination (runs in background)
-./scripts/batch_streaming_manager monitor
 ```
 
 ### Adding New Components
@@ -319,8 +325,8 @@ docker compose up -d --scale spark-worker=1
 # Verify DAG runs in Airflow UI
 open http://localhost:8085
 
-# Check streaming coordination
-tail -f /tmp/batch_streaming.log
+# Check Airflow scheduler logs
+docker compose logs -f airflow-scheduler
 ```
 
 **Connection Problems:**
@@ -377,8 +383,6 @@ airflow-spark/
 │   ├── schemas/          # Data schemas
 │   └── jsons/            # Configuration files
 ├── notebooks/            # Jupyter exploration notebooks
-├── scripts/              # Management scripts
-│   └── batch_streaming_manager  # Coordination script
 ├── config/               # Airflow configuration
 ├── logs/                 # Airflow logs
 ├── data/                 # Local data storage
@@ -393,8 +397,10 @@ airflow-spark/
 
 ### Initial Setup Checklist
 
-1. **✅ Environment Setup**
+1. **✅ Clone and Configure**
    ```bash
+   git clone <your-repo>
+   cd airflow-spark
    cp .env.example .env
    # Edit .env with secure credentials
    ```
@@ -402,26 +408,27 @@ airflow-spark/
 2. **✅ Start Platform**
    ```bash
    docker compose up -d
+   # Wait ~2-3 minutes for services to initialize
    ```
 
 3. **✅ Verify Services**
-   - Open Airflow UI: http://localhost:8085
-   - Check all services: `docker compose ps`
-
-4. **✅ Test Connectivity**
    ```bash
-   # Run test DAGs
-   docker compose exec airflow-webserver airflow dags trigger hello_world_check
-   docker compose exec airflow-webserver airflow dags trigger simple_spark_check
+   docker compose ps  # All services should be "Up"
    ```
 
-5. **✅ Start Data Processing**
-   ```bash
-   # Begin historical data processing
-   docker compose exec airflow-webserver airflow dags trigger daily_github_bronze
-   
-   # Monitor progress in Airflow UI
-   ```
+4. **✅ Access Airflow UI**
+   - Open: http://localhost:8085
+   - Login with credentials from .env
+   - All DAGs should be visible
+
+5. **✅ Run Test DAGs**
+   - In Airflow UI, trigger `hello_world_check`
+   - Verify it completes successfully
+
+6. **✅ Start Processing Data**
+   - Batch processing starts automatically at scheduled times
+   - For immediate processing: trigger `daily_github_bronze` manually
+   - For streaming: manually trigger `producer_github_events` and `consumer_github_events`
 
 ### Next Steps
 
